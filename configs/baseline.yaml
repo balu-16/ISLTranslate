@@ -1,0 +1,117 @@
+# Paths are relative to the repository working directory. Set exact revisions before auditing.
+experiment: baseline
+run_dir: runs/baseline
+data:
+  target:
+    annotations: data/raw/ISLTranslate.csv
+    dataset_name: isltranslate
+    dataset_revision: REQUIRED
+    annotation_revision: original
+    columns: {uid: [uid], text: [text]}
+    pose_root: data/raw/poses
+    video_root: null
+    pose_pattern: "{uid}.pose"
+    video_pattern: "{uid}.mp4"
+    source_mapping: data/metadata/source_mapping.csv
+    candidate_uid_pattern: '^(?P<source>.+)-(?P<sequence>\d+)$'
+    metadata_csv: null
+    corrections_jsonl: null
+    coordinate_space: image_pixels
+  pretrain: null
+  interpreter_csv: data/raw/ISL-signer_validation.csv
+  interpreter_columns:
+    uid: [uid]
+    text: [Transcribed Text]
+    interpreter_text: [Gold Translation]
+  manifest: data/manifests/target.jsonl
+  pretrain_manifest: data/manifests/pretrain.jsonl
+  split_dir: splits/source-v1
+  feature_dir: artifacts/features
+  rgb_dir: artifacts/rgb
+  split_seed: 2026
+  ratios: [0.8, 0.1, 0.1]
+  protocol: source-held-out
+  original_splits_csv: null
+  workers: 0
+features:
+  schema_version: upper-hands-v1
+  person_index: null
+  confidence_thresholds: {POSE_LANDMARKS: 0.5}
+  interpolation_seconds: 0.12
+  discontinuity_seconds: 0.2
+  epsilon: 0.000001
+  local_hands: false
+  bones: false
+  face: false
+  depth_scales: {}
+  resample_fps: null
+context: {enabled: false, previous_seconds: 0.5, next_seconds: 0.5, allow_gaps: false}
+rgb:
+  mode: 'off'
+  hand_crops: false
+  weights_path: artifacts/models/resnet18/resnet18-f37072fd.pth
+  revision: torchvision-resnet18-IMAGENET1K_V1-f37072fd
+  crop_revision: upper-body-hand-v1
+  crop_size: 224
+  sync_tolerance_seconds: 0.06
+  pixel_augmentation: false
+model:
+  decoder: t5
+  t5_repo: google/flan-t5-small
+  t5_revision: main
+  t5_dir: artifacts/models/flan-t5-small
+  cnn_channels: [256, 512]
+  kernel_size: 5
+  downsample: 2
+  lstm_hidden: 256
+  lstm_layers: 2
+  dropout: 0.2
+  bpe_vocab_size: 4000
+  decoder_hidden: 512
+  decoder_embedding: 256
+lexical:
+  weight: 0
+  ramp_epochs: 0
+  method: regex
+  annotations: null
+  spacy_model: null
+  min_frequency: 2
+  max_vocabulary: 4000
+  gradient_diagnostics: false
+training:
+  seed: 42
+  optimizer: AdamW
+  lr_new_layers: 0.0003
+  lr_t5: 0.00003
+  lr_rgb: 0.00001
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  scheduler: cosine
+  micro_batch_size: 32
+  max_frames_per_batch: 16000
+  gradient_accumulation_steps: 2
+  gradient_clip_norm: 1.0
+  max_target_epochs: 20
+  early_stopping_patience: 3
+  retain_epoch_checkpoints: 3
+  pose_noise_std: 0
+  overfit_uids: null
+  stages:
+    - {name: adapter, dataset: target, epochs: 1, freeze_t5: true, tune_rgb: false}
+    - {name: joint, dataset: target, epochs: 19, freeze_t5: false, tune_rgb: false}
+generation: {beams: [1, 4], length_penalty: 1.0, max_new_tokens: 128}
+evaluation:
+  metrics: [bleu, chrf, ter, rouge, meteor, wer]
+  bertscore_model: null
+  bertscore_revision: null
+  bootstrap_samples: 1000
+  diagnostic_seed: 2026
+  repeat_seeds: [13, 42, 2026]
+  warmup_iterations: 5
+  benchmark_iterations: 20
+runtime:
+  device: auto
+  precision: fp32
+  recurrent_fp32: true
+  deterministic: true
+  wall_time_seconds: null

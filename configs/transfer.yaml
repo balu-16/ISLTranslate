@@ -1,0 +1,18 @@
+extends: baseline.yaml
+experiment: filtered-isign-transfer
+run_dir: runs/filtered-isign-transfer
+data:
+  split_dir: splits/source-v1-transfer
+  pretrain:
+    annotations: data/raw/iSign_v1.1.csv
+    dataset_name: isign
+    dataset_revision: REQUIRED
+    columns: {uid: [uid], text: [text]}
+    pose_root: data/raw/isign-poses
+    source_mapping: data/metadata/isign_source_mapping.csv
+    metadata_csv: null
+training:
+  stages:
+    - {name: pretrain-adapter, dataset: pretrain, epochs: 1, freeze_t5: true}
+    - {name: pretrain-joint, dataset: pretrain, epochs: 4, freeze_t5: false}
+    - {name: target-finetune, dataset: target, epochs: 20, freeze_t5: false}

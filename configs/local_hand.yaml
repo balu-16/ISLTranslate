@@ -1,0 +1,4 @@
+extends: baseline.yaml
+experiment: local-hand
+run_dir: runs/local-hand
+features: {local_hands: true}

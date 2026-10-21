@@ -1,0 +1,4 @@
+extends: baseline.yaml
+experiment: sparse-face
+run_dir: runs/sparse-face
+features: {face: true}

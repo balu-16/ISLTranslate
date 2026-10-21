@@ -1,0 +1,7 @@
+extends: baseline.yaml
+experiment: attention-lstm
+run_dir: runs/attention-lstm
+model: {decoder: lstm, bpe_vocab_size: 4000}
+training:
+  stages:
+    - {name: lstm-joint, dataset: target, epochs: 20, freeze_t5: false}

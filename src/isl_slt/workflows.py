@@ -1,0 +1,294 @@
+"""CLI workflows composed from production functions; heavy imports occur inside explicit operations."""
+
+from pathlib import Path
+
+from isl_slt.config import Config
+from isl_slt.utils.io import file_hash, fingerprint, read_json, write_json, write_jsonl
+
+
+def planned_experiment(config: Config) -> dict:
+    return {"experiment": config.experiment, "run_dir": config.run_dir, "execution": "planned only",
+            "config": config.model_dump(mode="json"), "stages": [stage.model_dump() for stage in config.training.stages],
+            "assets": {name: {"path": path, "exists": Path(path).exists()} for name, path in {
+                "annotations": config.data.target.annotations, "poses": config.data.target.pose_root,
+                "splits": str(Path(config.data.split_dir) / "splits.json"), "t5": config.model.t5_dir}.items()},
+            "network": "Only explicit prepare-model --allow-network may download assets",
+            "numerical_validation": "not performed by planning"}
+
+
+def audit(config: Config) -> dict:
+    from isl_slt.data.dataset import raw_sequence
+    from isl_slt.data.manifests import adapt_csv, attach_interpreter, audit_records, save_manifest
+    from isl_slt.data.pose import read_pose
+    from isl_slt.features.pose import prepare_pose
+    reports = {}
+    for kind, adapter, destination in (("target", config.data.target, config.data.manifest),
+                                       ("pretrain", config.data.pretrain, config.data.pretrain_manifest)):
+        if adapter is None:
+            continue
+        records = adapt_csv(adapter)
+        if kind == "target" and config.data.interpreter_csv:
+            records = attach_interpreter(records, config.data.interpreter_csv, config.data.interpreter_columns)
+        locked = []
+        for record in records:
+            hashes = {name: file_hash(path) for name, path in {
+                "pose": record.pose_path, "video": record.video_path, "timestamps": record.timestamps_path
+            }.items() if path and Path(path).is_file()}
+            if any(hashes.get(name) != value for name, value in record.asset_hashes.items()):
+                raise ValueError(f"{record.uid}: supplied asset checksums conflict with local files")
+            duplicates = sorted(set(record.duplicate_fingerprints) | {
+                f"{name}-file-sha256:{value}" for name, value in hashes.items() if name in ("pose", "video")})
+            locked.append(record.model_copy(update={"asset_hashes": hashes, "duplicate_fingerprints": duplicates}))
+        records = locked
+        report = audit_records(records)
+        pose_audits = []
+        for record in records:
+            if not Path(record.pose_path).is_file():
+                continue
+            try:
+                sequence = read_pose(record, config.features)
+                prepared = prepare_pose(sequence, config.features)
+                pose_audits.append({"uid": record.uid, "frames": len(sequence.times), "fps": sequence.metadata["fps"],
+                    "missing_selected_landmarks": int((~prepared.observed).sum()),
+                    "total_selected_landmarks": prepared.observed.size, "components": sequence.metadata["components"],
+                    "input_dim": prepared.values.shape[1], "rgb_transform_present": record.image_transform is not None})
+            except (ValueError, OSError) as error:
+                pose_audits.append({"uid": record.uid, "error": str(error)})
+        report["poses"] = pose_audits
+        report["context_requested"] = config.context.enabled
+        report["rgb_requested"] = config.rgb.mode != "off"
+        if config.rgb.mode != "off":
+            report["rgb_unavailable"] = [record.uid for record in records if not record.video_path or
+                not Path(record.video_path).is_file() or record.image_transform is None]
+        if config.context.enabled:
+            context_errors = []
+            for record in records:
+                try:
+                    raw_sequence(record, records, config)
+                except (ValueError, OSError) as error:
+                    context_errors.append({"uid": record.uid, "error": str(error)})
+            report["context_errors"] = context_errors
+        save_manifest(destination, records)
+        write_json(Path(destination).with_suffix(".audit.json"), report)
+        reports[kind] = report
+    return reports
+
+
+def split(config: Config) -> dict:
+    from isl_slt.data.manifests import load_manifest
+    from isl_slt.data.splits import export_splits, filter_pretraining, make_splits
+    partitions = make_splits(load_manifest(config.data.manifest), config.data)
+    contamination = None
+    if config.data.pretrain is not None:
+        kept, contamination = filter_pretraining(load_manifest(config.data.pretrain_manifest), partitions)
+        if not kept:
+            raise ValueError("No eligible additional iSign examples remain after filtering")
+        partitions["pretrain"] = kept
+    return export_splits(partitions, config.data, contamination)
+
+
+def prepare_features(config: Config) -> dict:
+    from isl_slt.data.dataset import dependencies_for, raw_sequence
+    from isl_slt.data.splits import checked_splits
+    from isl_slt.features.cache import preprocessing_fingerprint, write_features
+    from isl_slt.features.pose import prepare_pose
+    partitions, _ = checked_splits(config.data)
+    results = {}
+    for name, records in partitions.items():
+        counts = []
+        for record in records:
+            sequence = raw_sequence(record, records, config)
+            prepared = prepare_pose(sequence, config.features, config.context.enabled)
+            metadata = write_features(config, record, prepared, dependencies_for(record, records, config))
+            counts.append({"uid": record.uid, "frames": metadata["frames"], "input_dim": metadata["input_dim"]})
+        results[name] = counts
+    report = {"preprocessing_fingerprint": preprocessing_fingerprint(config), "partitions": results}
+    write_json(Path(config.data.feature_dir) / preprocessing_fingerprint(config) / "index.json", report)
+    return {"preprocessing_fingerprint": report["preprocessing_fingerprint"],
+            "counts": {name: len(rows) for name, rows in results.items()}}
+
+
+def prepare_model(config: Config, allow_network: bool) -> dict:
+    if not allow_network:
+        raise ValueError("Model preparation requires explicit --allow-network; ordinary operations stay local")
+    results = {}
+    if config.model.decoder == "t5":
+        from huggingface_hub import HfApi, snapshot_download
+        directory = Path(config.model.t5_dir)
+        if (directory / "asset.json").exists():
+            metadata = read_json(directory / "asset.json")
+            if metadata["repository"] != config.model.t5_repo or metadata["requested_revision"] != config.model.t5_revision:
+                raise ValueError("Existing prepared model uses a different repository/revision; choose a new asset directory")
+            for name, expected in metadata["files"].items():
+                if file_hash(directory / name) != expected:
+                    raise ValueError(f"Prepared T5 asset checksum changed: {name}")
+        else:
+            revision = HfApi().model_info(config.model.t5_repo, revision=config.model.t5_revision).sha
+            snapshot_download(repo_id=config.model.t5_repo, revision=revision, local_dir=str(directory),
+                              allow_patterns=["*.json", "*.safetensors", "*.model", "tokenizer.*"])
+            files = {str(path.relative_to(directory)): file_hash(path) for path in directory.rglob("*")
+                     if path.is_file() and ".cache" not in path.relative_to(directory).parts and path.name != "asset.json"}
+            metadata = {"repository": config.model.t5_repo, "requested_revision": config.model.t5_revision,
+                        "resolved_revision": revision, "files": files,
+                        "initializer": "generic pretrained text T5" if config.model.t5_repo == "google/flan-t5-small"
+                        else "user-configured initializer; task-specific contamination provenance is unverified"}
+            write_json(directory / "asset.json", metadata, immutable=True)
+        results["t5"] = metadata
+    if config.rgb.mode != "off":
+        import hashlib
+        import urllib.request
+        from isl_slt.utils.io import atomic_open
+        path = Path(config.rgb.weights_path)
+        if not path.exists():
+            digest = hashlib.sha256()
+            with urllib.request.urlopen("https://download.pytorch.org/models/resnet18-f37072fd.pth") as response:
+                with atomic_open(path) as stream:
+                    while chunk := response.read(1024 * 1024):
+                        digest.update(chunk)
+                        stream.write(chunk)
+                    if not digest.hexdigest().startswith("f37072fd"):
+                        raise ValueError("ResNet18 download hash-prefix check failed")
+        if not file_hash(path).startswith("f37072fd"):
+            raise ValueError("Local ResNet18 weights do not match the documented initializer")
+        results["rgb"] = {"revision": config.rgb.revision, "sha256": file_hash(path)}
+    return results
+
+
+def prepare_rgb(config: Config) -> dict:
+    import torch
+    from isl_slt.data.dataset import dependencies_for, raw_sequence
+    from isl_slt.data.splits import checked_splits
+    from isl_slt.features.rgb import RGBEncoder, load_crops, rgb_signature, write_rgb
+    from isl_slt.utils.runtime import autocast, device_for
+    if config.rgb.mode != "cached":
+        raise ValueError("prepare-rgb writes frozen vectors and requires rgb.mode=cached")
+    partitions, _ = checked_splits(config.data)
+    device = device_for(config.runtime)
+    encoder = RGBEncoder(config.rgb.weights_path).to(device).eval()
+    counts = {}
+    for name, records in partitions.items():
+        for record in records:
+            rgb_signature(config, record, dependencies_for(record, records, config))
+            sequence = raw_sequence(record, records, config)
+            images, masks = load_crops(record, records, sequence, config)
+            with torch.no_grad(), autocast(config.runtime, device):
+                vectors = encoder(images.to(device)).float().cpu().numpy()
+            write_rgb(config, record, dependencies_for(record, records, config), vectors, masks.numpy(), sequence.times)
+        counts[name] = len(records)
+    return {"cached_examples": counts, "cnn_trainable": False, "revision": config.rgb.revision}
+
+
+def evaluation_inputs(config: Config, checkpoint: str, partition: str):
+    from isl_slt.data.dataset import PoseDataset
+    from isl_slt.data.splits import checked_splits
+    from isl_slt.features.cache import preprocessing_fingerprint
+    from isl_slt.inference import Predictor
+    partitions, metadata = checked_splits(config.data)
+    predictor = Predictor.from_checkpoint(checkpoint, config.runtime)
+    if preprocessing_fingerprint(config) != predictor.checkpoint["compatibility"]["feature_schema"]:
+        raise ValueError("Evaluation feature/context configuration differs from checkpoint")
+    if config.rgb.model_dump() != predictor.config.rgb.model_dump() or config.model.model_dump() != predictor.config.model.model_dump():
+        raise ValueError("Use evaluation configuration inheriting the checkpoint experiment's model/RGB settings")
+    saved_hash = predictor.checkpoint["compatibility"]["split_hashes"].get(partition)
+    if saved_hash is None or saved_hash != metadata["hashes"][partition]:
+        raise ValueError("Evaluation partition differs from the checkpoint's immutable manifest")
+    dataset = PoseDataset(partitions[partition], config, training=False)
+    return predictor, dataset, metadata
+
+
+def comparison_fingerprint(predictor) -> str:
+    config = predictor.config
+    training = config.training.model_dump(mode="json")
+    training.pop("seed")
+    return fingerprint({"model": config.model.model_dump(mode="json"), "training": training,
+                        "features": predictor.checkpoint["compatibility"]["feature_schema"],
+                        "rgb": config.rgb.model_dump(mode="json"), "lexical": config.lexical.model_dump(mode="json"),
+                        "generation": config.generation.model_dump(mode="json"),
+                        "rgb_initializer": predictor.checkpoint.get("rgb_initializer"),
+                        "initializer": predictor.checkpoint["initializer"]})
+
+
+def evaluate(config: Config, checkpoint: str, partition: str, output: str, decoding: str | None = None) -> dict:
+    from isl_slt.evaluation.generation import generate_loader, score_rows, select_decoding
+    from isl_slt.training.engine import loader_for
+    predictor, dataset, metadata = evaluation_inputs(config, checkpoint, partition)
+    loader, _ = loader_for(dataset, predictor.tokenizer, config, training=False)
+    checkpoint_sha = file_hash(checkpoint)
+    generation_hash = fingerprint(config.generation.model_dump(mode="json"))
+    if partition == "validation":
+        (beams, _, rows), candidates = select_decoding(predictor.model, predictor.tokenizer, loader, config, predictor.device)
+        selection = {"checkpoint_sha256": checkpoint_sha, "partition": "validation", "selected_beams": beams,
+                     "validation_membership_hash": metadata["hashes"]["validation"],
+                     "generation_hash": generation_hash, "candidates": candidates}
+        write_json(Path(output) / "decoding.json", selection)
+    else:
+        if decoding:
+            selection = read_json(decoding)
+            if (selection["checkpoint_sha256"] != checkpoint_sha or selection["partition"] != "validation" or
+                selection["validation_membership_hash"] != metadata["hashes"]["validation"] or
+                selection["generation_hash"] != generation_hash):
+                raise ValueError("Decoding selection must match this checkpoint, validation split and generation settings")
+            beams = selection["selected_beams"]
+        else:
+            if (config.generation.model_dump() != predictor.config.generation.model_dump() or predictor.beams is None
+                or predictor.checkpoint["state"]["decoding_partition"] != "validation"):
+                raise ValueError("Run validation decoding selection first and supply --decoding")
+            beams = predictor.beams
+        rows = generate_loader(predictor.model, predictor.tokenizer, loader, config, predictor.device, beams)
+    write_jsonl(Path(output) / "predictions.jsonl", rows)
+    report = {"partition": partition, "membership_hash": metadata["hashes"][partition],
+              "protocol": metadata["protocol"], "seed": predictor.config.training.seed,
+              "comparison_fingerprint": comparison_fingerprint(predictor), "selected_beams": beams,
+              "checkpoint_sha256": checkpoint_sha, "metrics": score_rows(rows, config),
+              "runtime": config.runtime.model_dump(mode="json"),
+              "context_lookahead_seconds": config.context.next_seconds if config.context.enabled else 0,
+              "parameter_counts": predictor.checkpoint["parameter_counts"]}
+    write_json(Path(output) / "metrics.json", report)
+    return report
+
+
+def diagnostics(config: Config, checkpoint: str, partition: str, output: str) -> dict:
+    from isl_slt.data.dataset import LengthBuckets
+    from isl_slt.evaluation.diagnostics import perturb_items
+    from isl_slt.evaluation.generation import score_rows
+    predictor, dataset, metadata = evaluation_inputs(config, checkpoint, partition)
+    if predictor.beams is None:
+        raise ValueError("Diagnostics require validation-selected decoding from a trajectory checkpoint")
+    import random
+    order = list(range(len(dataset)))
+    random.Random(config.evaluation.diagnostic_seed).shuffle(order)
+    if len(order) < 2:
+        raise ValueError("Paired diagnostics need at least two examples")
+    donors = {order[i]: order[(i + 1) % len(order)] for i in range(len(order))}
+    reports = {}
+    for kind in ("real", "blank", "incorrect", "shuffle"):
+        rows = []
+        batches = LengthBuckets(dataset.lengths, config.training.micro_batch_size, config.training.max_frames_per_batch,
+                                config.training.seed, False)
+        for indices in batches:
+            items, flags = [], []
+            for index in indices:
+                item = dataset[index]
+                if kind == "incorrect":
+                    donor = dataset[donors[index]]
+                    flag = {"kind": kind, "donor_uid": donor["record"].uid,
+                            "same_source": donor["record"].source_id == item["record"].source_id}
+                    donor["record"] = item["record"]
+                    changed = donor
+                else:
+                    changed_items, changed_flags = perturb_items([item], kind, config.evaluation.diagnostic_seed + index)
+                    changed, flag = changed_items[0], changed_flags[0]
+                items.append(changed)
+                flags.append(flag)
+            predictions = predictor.predict_items(items)
+            for index, prediction, flag in zip(indices, predictions, flags):
+                record = dataset.records[index]
+                rows.append({**prediction, "source_id": record.source_id, "references": [record.text],
+                             "interpreter_reference": record.interpreter_text, "diagnostic": flag})
+        write_jsonl(Path(output) / f"{kind}.jsonl", rows)
+        reports[kind] = score_rows(rows, config)
+    result = {"paired_metrics": reports, "membership_hash": metadata["hashes"][partition],
+              "seed": config.evaluation.diagnostic_seed,
+              "interpretation": "Evidence of dependence on visual inputs; not standalone semantic-faithfulness proof"}
+    write_json(Path(output) / "diagnostics.json", result)
+    return result

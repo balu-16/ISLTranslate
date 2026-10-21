@@ -1,0 +1,306 @@
+"""Single-device stage engine with window-normalized losses, free validation and boundary resume."""
+
+import itertools
+import math
+import uuid
+from pathlib import Path
+
+import torch
+from torch.utils.data import DataLoader
+
+from isl_slt.config import Config, Stage
+from isl_slt.data.dataset import Collator, LengthBuckets, PoseDataset
+from isl_slt.data.lexical import BPETokenizer, Lexicon
+from isl_slt.data.manifests import manifest_hash
+from isl_slt.data.splits import checked_splits
+from isl_slt.evaluation.generation import select_decoding
+from isl_slt.losses.objectives import loss_for_window, window_denominators
+from isl_slt.models.factory import build_model, load_tokenizer
+from isl_slt.training.checkpoint import bundle_tokenizer, compatibility, load_checkpoint, restore_tokenizer, save_checkpoint
+from isl_slt.utils.io import append_event, file_hash, read_json, versions, write_json, write_jsonl
+from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything
+
+
+def optimizer_for(model, config: Config):
+    t5_ids = {id(parameter) for parameter in model.t5.parameters()} if hasattr(model, "t5") else set()
+    rgb = model.visual.rgb_encoder
+    rgb_ids = {id(parameter) for parameter in rgb.parameters()} if rgb is not None else set()
+    groups = {}
+    rates = {"new": config.training.lr_new_layers, "t5": config.training.lr_t5, "rgb": config.training.lr_rgb}
+    for name, parameter in model.named_parameters():
+        kind = "t5" if id(parameter) in t5_ids else "rgb" if id(parameter) in rgb_ids else "new"
+        decay = parameter.ndim > 1 and not name.endswith("bias")
+        group = groups.setdefault((kind, decay), {"params": [], "kind": kind, "base_lr": rates[kind],
+            "lr": rates[kind], "weight_decay": config.training.weight_decay if decay else 0.0})
+        group["params"].append(parameter)
+    # Frozen parameters remain registered, with grad=None, preserving groups across stage changes.
+    return torch.optim.AdamW(list(groups.values()))
+
+
+def set_stage(model, stage: Stage) -> None:
+    if hasattr(model, "t5"):
+        for parameter in model.t5.parameters():
+            parameter.requires_grad_(not stage.freeze_t5)
+        if stage.freeze_t5:
+            model.t5.eval()  # Eval changes dropout, never autograd connectivity.
+    if model.visual.rgb_encoder is not None:
+        model.visual.rgb_encoder.set_tuning(stage.tune_rgb)
+
+
+class StageScheduler:
+    """A new cosine schedule per explicit stage; optimizer moments survive transitions."""
+    def __init__(self, optimizer, warmup_ratio: float):
+        self.optimizer, self.warmup_ratio = optimizer, warmup_ratio
+        self.stage, self.completed, self.total, self.warmup = None, 0, 1, 0
+
+    def configure(self, name: str, total: int) -> None:
+        self.stage, self.completed, self.total = name, 0, max(total, 1)
+        self.warmup = math.ceil(self.total * self.warmup_ratio)
+        self.apply()
+
+    def apply(self) -> None:
+        upcoming = self.completed + 1
+        if self.warmup and upcoming <= self.warmup:
+            factor = upcoming / self.warmup
+        else:
+            progress = (self.completed - self.warmup) / max(self.total - self.warmup, 1)
+            factor = (1 + math.cos(math.pi * min(max(progress, 0), 1))) / 2
+        for group in self.optimizer.param_groups:
+            group["lr"] = group["base_lr"] * factor
+
+    def step(self) -> None:
+        self.completed += 1
+        self.apply()
+
+    def state_dict(self):
+        return {key: getattr(self, key) for key in ("stage", "completed", "total", "warmup", "warmup_ratio")}
+
+    def load_state_dict(self, state):
+        for key, value in state.items():
+            setattr(self, key, value)
+        self.apply()
+
+
+def loader_for(dataset, tokenizer, config: Config, *, training: bool, offset: int = 0):
+    sampler = LengthBuckets(dataset.lengths, config.training.micro_batch_size, config.training.max_frames_per_batch,
+                            config.training.seed, training)
+    sampler.epoch = dataset.epoch
+    batches = sampler.batches()[offset:]
+    generator = torch.Generator().manual_seed(config.training.seed + dataset.epoch)
+    return DataLoader(dataset, batch_sampler=batches, collate_fn=Collator(tokenizer, labels=training),
+                      num_workers=config.data.workers, generator=generator), sampler
+
+
+def update_window(model, optimizer, scheduler, scaler, batches, config: Config, device, weight: float) -> dict:
+    token_count, lexical_count = window_denominators(batches)
+    optimizer.zero_grad(set_to_none=True)
+    raw_ce, raw_lexical, positives = 0.0, 0.0, 0
+    for batch in batches:
+        moved = batch.to(device)
+        with autocast(config.runtime, device):
+            output = model(labels=moved.labels, **moved.visual)
+            loss, components = loss_for_window(output, moved, token_count, lexical_count, weight)
+        if not bool(torch.isfinite(loss)):
+            optimizer.zero_grad(set_to_none=True)
+            return {"updated": False, "reason": "nonfinite_loss"}
+        scaler.scale(loss).backward()
+        raw_ce += components["ce_sum"]
+        raw_lexical += components["lexical_sum"]
+        positives += int(batch.lexical.sum()) if batch.lexical is not None else 0
+    scaler.unscale_(optimizer)
+    gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.training.gradient_clip_norm)
+    finite = bool(torch.isfinite(gradient_norm))
+    if finite:
+        before = scaler.get_scale()
+        scaler.step(optimizer)
+        scaler.update()
+        updated = scaler.get_scale() >= before
+    else:
+        # GradScaler recorded nonfinite gradients during unscale_; update its scale without an optimizer step.
+        if scaler.is_enabled():
+            scaler.update()
+        updated = False
+    if updated:
+        scheduler.step()
+    diagnostics = {}
+    if config.lexical.gradient_diagnostics:
+        for name in ("visual", "bridge", "lexical_head"):
+            module = getattr(model, name, None)
+            if module is not None and finite:
+                diagnostics[name] = math.sqrt(sum(float(p.grad.detach().float().square().sum())
+                                                   for p in module.parameters() if p.grad is not None))
+    optimizer.zero_grad(set_to_none=True)
+    return {"updated": updated, "ce": raw_ce / token_count, "lexical_raw": raw_lexical / max(lexical_count, 1),
+            "lexical_weight": weight, "lexical_weighted": weight * raw_lexical / max(lexical_count, 1),
+            "positive_labels": positives, "label_slots": lexical_count, "valid_tokens": token_count,
+            "gradient_norm": float(gradient_norm) if finite else None, "gradient_diagnostics": diagnostics}
+
+
+def run_training(config: Config, resume: str | None = None) -> dict:
+    partitions, split_metadata = checked_splits(config.data)
+    context_partitions = dict(partitions)
+    partitions = dict(partitions)
+    if config.training.overfit_uids:
+        requested = [line.strip() for line in Path(config.training.overfit_uids).read_text().splitlines() if line.strip()]
+        if len(set(requested)) != len(requested) or not 32 <= len(requested) <= 64:
+            raise ValueError("Overfit requires 32–64 unique manually inspected TRAIN UIDs")
+        selected = [row for row in partitions["train"] if row.uid in requested]
+        if len(selected) != len(requested):
+            raise ValueError("Overfit UIDs must all belong to the immutable training partition")
+        partitions["train"], partitions["validation"] = selected, selected
+        split_metadata = {**split_metadata, "hashes": {**split_metadata["hashes"], "overfit": manifest_hash(selected)}}
+    seed_everything(config.training.seed, config.runtime.deterministic)
+    device, root, budget = device_for(config.runtime), Path(config.run_dir), Budget(config.runtime.wall_time_seconds)
+    backend = {"device": str(device), "torch": str(torch.__version__), "hip": torch.version.hip,
+               "cuda": torch.version.cuda}
+    if not resume and (root / "resolved.json").exists():
+        raise ValueError("Run directory already exists; resume explicitly or choose a fresh run_dir")
+    root.mkdir(parents=True, exist_ok=True)
+    training_records = partitions["train"] + (partitions.get("pretrain", []) if any(
+        stage.dataset == "pretrain" for stage in config.training.stages) else [])
+    if resume:
+        restored = load_checkpoint(resume)
+        if restored.get("inference_only"):
+            raise ValueError("Averaged inference checkpoints cannot resume optimizer training")
+        if restored["runtime_backend"] != backend:
+            raise ValueError("Exact training resume requires the same PyTorch/backend/device; inference may use another backend")
+        restore_tokenizer(restored["tokenizer"], root / "tokenizer")
+        tokenizer = load_tokenizer(config, root / "tokenizer")
+        lexicon = Lexicon.from_payload(restored["lexicon"]) if restored["lexicon"] else None
+    else:
+        restored = None
+        tokenizer = BPETokenizer.fit(training_records, config.model.bpe_vocab_size) if config.model.decoder == "lstm" else load_tokenizer(config)
+        tokenizer.save_pretrained(root / "tokenizer")
+        lexicon = Lexicon.fit(training_records, config.lexical) if config.lexical.weight else None
+    lexical_payload = lexicon.payload() if lexicon else None
+    rgb_initializer = restored.get("rgb_initializer") if restored else (
+        {"revision": config.rgb.revision, "sha256": file_hash(config.rgb.weights_path),
+         "crop_revision": config.rgb.crop_revision} if config.rgb.mode != "off" else None)
+    if restored and config.rgb.mode == "cached" and (
+        rgb_initializer is None or file_hash(config.rgb.weights_path) != rgb_initializer["sha256"]
+    ):
+        raise ValueError("Cached-RGB resume requires the original CNN initializer checksum")
+    tokenizer_bundle = bundle_tokenizer(root / "tokenizer")
+    for stage in config.training.stages:
+        if stage.dataset == "pretrain" and "pretrain" not in partitions:
+            raise ValueError("Pretraining stage requires a filtered pretrain manifest and contamination report")
+    datasets = {}
+    for name in {stage.dataset for stage in config.training.stages}:
+        partition = "train" if name == "target" else "pretrain"
+        datasets[name] = PoseDataset(partitions[partition], config, lexicon, training=True,
+                                     context_records=context_partitions[partition])
+    validation = PoseDataset(partitions["validation"], config, training=False,
+        context_records=context_partitions["train" if config.training.overfit_uids else "validation"])
+    input_dim = datasets["target"].input_dim
+    if any(dataset.input_dim != input_dim for dataset in [*datasets.values(), validation]):
+        raise ValueError("Stage/validation feature dimensions differ")
+    artifacts = {name: dataset.cache_fingerprint for name, dataset in datasets.items()}
+    artifacts["validation"] = validation.cache_fingerprint
+    expected = compatibility(config, input_dim, split_metadata, tokenizer_bundle, lexical_payload, rgb_initializer, artifacts)
+    if restored is not None and restored["compatibility"] != expected:
+        raise ValueError("Resume fingerprint mismatch; do not change data, tokenizer, features or experiment")
+    model = build_model(config, input_dim, tokenizer, len(lexicon.words) if lexicon else 0,
+                        checkpoint_t5_config=restored["t5_config"] if restored else None,
+                        restoring=restored is not None).to(device)
+    optimizer = optimizer_for(model, config)
+    scheduler = StageScheduler(optimizer, config.training.warmup_ratio)
+    scaler = torch.amp.GradScaler(device.type, enabled=device.type == "cuda" and config.runtime.precision == "fp16")
+    state = {"stage_index": 0, "epoch_in_stage": 0, "global_epoch": 0, "batch_offset": 0, "updates": 0,
+             "selected_beams": None, "decoding_partition": None,
+             "best_bleu": -1.0, "best_chrf": -1.0, "bad_epochs": 0}
+    run_id = str(uuid.uuid4())
+    if restored:
+        model.load_state_dict(restored["model"], strict=True)
+        optimizer.load_state_dict(restored["optimizer"])
+        scheduler.load_state_dict(restored["scheduler"])
+        scaler.load_state_dict(restored["scaler"])
+        state, run_id = restored["state"], restored["run_id"]
+        restore_rng(restored["rng"])
+    write_json(root / "resolved.json", config.model_dump(mode="json"))
+    write_json(root / "compatibility.json", expected)
+    if lexicon:
+        write_json(root / "lexicon.json", lexical_payload)
+    asset = read_json(Path(config.model.t5_dir) / "asset.json") if config.model.decoder == "t5" and not restored else (
+        restored.get("initializer") if restored else {"type": "training-only-BPE"})
+    package_versions = versions()
+
+    def save(name: str):
+        payload = {"format": "isl-slt-checkpoint-v1", "run_id": run_id, "inference_only": False,
+            "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
+            "scaler": scaler.state_dict(), "state": dict(state), "rng": rng_state(),
+            "config": config.model_dump(mode="json"), "compatibility": expected,
+            "tokenizer": tokenizer_bundle, "lexicon": lexical_payload,
+            "t5_config": model.t5.config.to_dict() if hasattr(model, "t5") else None,
+            "input_dim": input_dim, "initializer": asset, "versions": package_versions,
+            "runtime_backend": backend,
+            "rgb_initializer": rgb_initializer,
+            "parameter_counts": {"total": sum(p.numel() for p in model.parameters()),
+                                 "trainable": sum(p.numel() for p in model.parameters() if p.requires_grad)}}
+        save_checkpoint(root / "checkpoints" / name, payload)
+
+    for stage_index in range(state["stage_index"], len(config.training.stages)):
+        stage = config.training.stages[stage_index]
+        dataset = datasets[stage.dataset]
+        state["stage_index"] = stage_index
+        if scheduler.stage != stage.name:
+            steps = 0
+            for epoch in range(stage.epochs):
+                dataset.epoch = state["global_epoch"] + epoch
+                _, sampler = loader_for(dataset, tokenizer, config, training=True)
+                steps += sampler.updates(config.training.gradient_accumulation_steps)
+            scheduler.configure(stage.name, steps)
+            if stage.dataset == "target" and stage_index and config.training.stages[stage_index - 1].dataset == "pretrain":
+                state.update(best_bleu=-1.0, best_chrf=-1.0, bad_epochs=0)
+        for epoch in range(state["epoch_in_stage"], stage.epochs):
+            state["epoch_in_stage"] = epoch
+            dataset.epoch = state["global_epoch"]
+            model.train()
+            set_stage(model, stage)
+            loader, _ = loader_for(dataset, tokenizer, config, training=True, offset=state["batch_offset"])
+            iterator = iter(loader)
+            while window := list(itertools.islice(iterator, config.training.gradient_accumulation_steps)):
+                if budget.expired:
+                    save("last.pt")
+                    return {"status": "wall_time_limit", "state": state, "run_dir": str(root)}
+                ramp = min(1, (state["global_epoch"] + 1) / max(config.lexical.ramp_epochs, 1))
+                outcome = update_window(model, optimizer, scheduler, scaler, window, config, device,
+                                        config.lexical.weight * ramp)
+                state["batch_offset"] += len(window)
+                state["updates"] += int(outcome["updated"])
+                append_event(root / "events.jsonl", kind="update", stage=stage.name,
+                             epoch=state["global_epoch"], update=state["updates"], **outcome)
+            if budget.expired:
+                save("last.pt")
+                return {"status": "wall_time_limit", "state": state, "run_dir": str(root)}
+            validation_loader, _ = loader_for(validation, tokenizer, config, training=False)
+            (beams, metrics, rows), candidate_scores = select_decoding(model, tokenizer, validation_loader, config, device)
+            state["selected_beams"] = beams
+            state["decoding_partition"] = "inspected-training-debug" if config.training.overfit_uids else "validation"
+            bleu, chrf = metrics["scores"]["bleu4"], metrics["scores"]["chrf++"]
+            improved_bleu, improved_chrf = bleu > state["best_bleu"], chrf > state["best_chrf"]
+            state["bad_epochs"] = 0 if improved_bleu else state["bad_epochs"] + 1
+            state["best_bleu"], state["best_chrf"] = max(bleu, state["best_bleu"]), max(chrf, state["best_chrf"])
+            state.update(global_epoch=state["global_epoch"] + 1, epoch_in_stage=epoch + 1, batch_offset=0)
+            prefix = "pretrain/" if stage.dataset == "pretrain" else ""
+            write_jsonl(root / "validation" / f"epoch-{state['global_epoch']:04d}.jsonl", rows)
+            write_json(root / "validation" / f"epoch-{state['global_epoch']:04d}.json", {
+                "selection_partition": "inspected-training-debug" if config.training.overfit_uids else "validation",
+                "selected_beams": beams, "candidates": candidate_scores})
+            append_event(root / "events.jsonl", kind="validation", stage=stage.name,
+                         epoch=state["global_epoch"], selected_beams=beams, metrics=metrics)
+            if improved_bleu:
+                save(prefix + "best-bleu.pt")
+            if improved_chrf:
+                save(prefix + "best-chrf.pt")
+            save(f"epoch-{state['global_epoch']:04d}.pt")
+            save("last.pt")
+            retained = sorted((root / "checkpoints").glob("epoch-*.pt"))
+            keep = config.training.retain_epoch_checkpoints
+            for old in retained[:max(0, len(retained) - keep)]:
+                old.unlink()
+            if stage_index == len(config.training.stages) - 1 and state["bad_epochs"] >= config.training.early_stopping_patience:
+                state["epoch_in_stage"] = stage.epochs
+                break
+        state.update(stage_index=stage_index + 1, epoch_in_stage=0, batch_offset=0)
+        save("last.pt")
+    return {"status": "completed", "state": state, "run_dir": str(root)}

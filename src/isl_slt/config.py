@@ -1,0 +1,237 @@
+"""Strict YAML configuration with explicit, relative inheritance and cross-feature checks."""
+
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, allow_inf_nan=False)
+
+
+class Adapter(Strict):
+    annotations: str = "data/raw/ISLTranslate.csv"
+    dataset_name: str = "isltranslate"
+    dataset_revision: str = "REQUIRED"
+    annotation_revision: str = "original"
+    columns: dict[str, list[str]] = Field(default_factory=lambda: {"uid": ["uid"], "text": ["text"]})
+    pose_root: str = "data/raw/poses"
+    video_root: str | None = None
+    pose_pattern: str = "{uid}.pose"
+    video_pattern: str = "{uid}.mp4"
+    source_mapping: str | None = "data/metadata/source_mapping.csv"
+    candidate_uid_pattern: str = r"^(?P<source>.+)-(?P<sequence>\d+)$"
+    metadata_csv: str | None = None
+    corrections_jsonl: str | None = None
+    coordinate_space: Literal["image_pixels", "normalized_image"] = "image_pixels"
+
+
+class Data(Strict):
+    target: Adapter = Field(default_factory=Adapter)
+    pretrain: Adapter | None = None
+    interpreter_csv: str | None = "data/raw/ISL-signer_validation.csv"
+    interpreter_columns: dict[str, list[str]] = Field(default_factory=lambda: {
+        "uid": ["uid"], "text": ["Transcribed Text"], "interpreter_text": ["Gold Translation"]
+    })
+    manifest: str = "data/manifests/target.jsonl"
+    pretrain_manifest: str = "data/manifests/pretrain.jsonl"
+    split_dir: str = "splits/source-v1"
+    feature_dir: str = "artifacts/features"
+    rgb_dir: str = "artifacts/rgb"
+    split_seed: int = 2026
+    ratios: tuple[float, float, float] = (0.8, 0.1, 0.1)
+    protocol: Literal["source-held-out", "exploratory-unverified", "original-paper"] = "source-held-out"
+    original_splits_csv: str | None = None
+    workers: int = Field(default=0, ge=0)
+
+
+class Features(Strict):
+    schema_version: str = "upper-hands-v1"
+    person_index: int | None = Field(default=None, ge=0)
+    confidence_thresholds: dict[str, float] = Field(default_factory=lambda: {"POSE_LANDMARKS": 0.5})
+    interpolation_seconds: float = Field(default=0.12, ge=0)
+    discontinuity_seconds: float = Field(default=0.2, gt=0)
+    epsilon: float = Field(default=1e-6, gt=0)
+    local_hands: bool = False
+    bones: bool = False
+    face: bool = False
+    # Per-component explicit local z units. These channels never form a calibrated 3D skeleton.
+    depth_scales: dict[str, float] = Field(default_factory=dict)
+    resample_fps: float | None = Field(default=None, gt=0)
+
+
+class Context(Strict):
+    enabled: bool = False
+    previous_seconds: float = Field(default=0.5, ge=0)
+    next_seconds: float = Field(default=0.5, ge=0)
+    allow_gaps: bool = False
+
+
+class RGB(Strict):
+    mode: Literal["off", "cached", "images"] = "off"
+    hand_crops: bool = False
+    weights_path: str = "artifacts/models/resnet18/resnet18-f37072fd.pth"
+    revision: str = "torchvision-resnet18-IMAGENET1K_V1-f37072fd"
+    crop_revision: str = "upper-body-hand-v1"
+    crop_size: int = Field(default=224, ge=32)
+    sync_tolerance_seconds: float = Field(default=0.06, gt=0)
+    pixel_augmentation: bool = False
+
+
+class Model(Strict):
+    decoder: Literal["t5", "lstm"] = "t5"
+    t5_repo: str = "google/flan-t5-small"
+    t5_revision: str = "main"
+    t5_dir: str = "artifacts/models/flan-t5-small"
+    cnn_channels: tuple[int, int] = (256, 512)
+    kernel_size: Literal[5] = 5
+    downsample: Literal[2, 4] = 2
+    lstm_hidden: int = Field(default=256, ge=1)
+    lstm_layers: Literal[2] = 2
+    dropout: float = Field(default=0.2, ge=0, lt=1)
+    bpe_vocab_size: int = Field(default=4000, ge=8)
+    decoder_hidden: int = Field(default=512, ge=1)
+    decoder_embedding: int = Field(default=256, ge=1)
+
+
+class Lexical(Strict):
+    weight: float = Field(default=0, ge=0)
+    ramp_epochs: int = Field(default=0, ge=0)
+    method: Literal["regex", "precomputed", "spacy"] = "regex"
+    annotations: str | None = None
+    spacy_model: str | None = None
+    min_frequency: int = Field(default=2, ge=1)
+    max_vocabulary: int = Field(default=4000, ge=1)
+    gradient_diagnostics: bool = False
+
+
+class Stage(Strict):
+    name: str
+    dataset: Literal["target", "pretrain"] = "target"
+    epochs: int = Field(ge=1)
+    freeze_t5: bool = False
+    tune_rgb: bool = False
+
+
+class Training(Strict):
+    seed: int = Field(default=42, ge=0, le=4294967295)
+    optimizer: Literal["AdamW"] = "AdamW"
+    lr_new_layers: float = Field(default=3e-4, gt=0)
+    lr_t5: float = Field(default=3e-5, gt=0)
+    lr_rgb: float = Field(default=1e-5, gt=0)
+    weight_decay: float = Field(default=0.01, ge=0)
+    warmup_ratio: float = Field(default=0.05, ge=0, lt=1)
+    scheduler: Literal["cosine"] = "cosine"
+    micro_batch_size: int = Field(default=32, ge=1)
+    max_frames_per_batch: int = Field(default=16000, ge=1)
+    gradient_accumulation_steps: int = Field(default=2, ge=1)
+    gradient_clip_norm: float = Field(default=1, gt=0)
+    max_target_epochs: int = Field(default=20, ge=1)
+    early_stopping_patience: int = Field(default=3, ge=1)
+    retain_epoch_checkpoints: int = Field(default=3, ge=0)
+    pose_noise_std: float = Field(default=0, ge=0, le=0.02)
+    overfit_uids: str | None = None
+    stages: list[Stage] = Field(default_factory=lambda: [
+        Stage(name="adapter", epochs=1, freeze_t5=True), Stage(name="joint", epochs=19)
+    ])
+
+
+class Generation(Strict):
+    beams: list[int] = Field(default_factory=lambda: [1, 4])
+    length_penalty: float = Field(default=1, gt=0)
+    max_new_tokens: int = Field(default=128, ge=1)
+
+
+class Evaluation(Strict):
+    metrics: list[Literal["bleu", "chrf", "ter", "rouge", "meteor", "wer", "bertscore"]] = Field(
+        default_factory=lambda: ["bleu", "chrf", "ter", "rouge", "meteor", "wer"])
+    bertscore_model: str | None = None
+    bertscore_revision: str | None = None
+    bootstrap_samples: int = Field(default=1000, ge=1)
+    diagnostic_seed: int = 2026
+    repeat_seeds: list[int] = Field(default_factory=lambda: [13, 42, 2026])
+    warmup_iterations: int = Field(default=5, ge=0)
+    benchmark_iterations: int = Field(default=20, ge=1)
+
+
+class Runtime(Strict):
+    device: Literal["cpu", "auto", "cuda"] = "auto"
+    precision: Literal["fp32", "bf16", "fp16"] = "fp32"
+    recurrent_fp32: bool = True
+    deterministic: bool = True
+    wall_time_seconds: float | None = Field(default=None, gt=0)
+
+
+class Config(Strict):
+    experiment: str = "baseline"
+    run_dir: str = "runs/baseline"
+    data: Data = Field(default_factory=Data)
+    features: Features = Field(default_factory=Features)
+    context: Context = Field(default_factory=Context)
+    rgb: RGB = Field(default_factory=RGB)
+    model: Model = Field(default_factory=Model)
+    lexical: Lexical = Field(default_factory=Lexical)
+    training: Training = Field(default_factory=Training)
+    generation: Generation = Field(default_factory=Generation)
+    evaluation: Evaluation = Field(default_factory=Evaluation)
+    runtime: Runtime = Field(default_factory=Runtime)
+
+    @model_validator(mode="after")
+    def compatible(self):
+        if min(self.model.cnn_channels) < 1:
+            raise ValueError("CNN channel widths must be positive")
+        if abs(sum(self.data.ratios) - 1) > 1e-8 or min(self.data.ratios) <= 0:
+            raise ValueError("Split ratios must be positive and sum to one")
+        if not self.generation.beams or any(n < 1 for n in self.generation.beams):
+            raise ValueError("Generation beams must be positive")
+        stages = self.training.stages
+        if len({s.name for s in stages}) != len(stages):
+            raise ValueError("Stage names must be unique")
+        if sum(s.epochs for s in stages if s.dataset == "target") != self.training.max_target_epochs:
+            raise ValueError("Target-stage epochs must equal max_target_epochs")
+        seen_target = False
+        for stage in stages:
+            seen_target |= stage.dataset == "target"
+            if stage.dataset == "pretrain" and (seen_target or self.data.pretrain is None):
+                raise ValueError("Pretraining needs an adapter and must precede all target stages")
+            if stage.tune_rgb and self.rgb.mode != "images":
+                raise ValueError("CNN tuning requires actual images, never frozen cached vectors")
+        if self.rgb.pixel_augmentation and self.rgb.mode != "images":
+            raise ValueError("Pixel augmentation requires image access")
+        if self.training.overfit_uids and any(stage.dataset == "pretrain" for stage in stages):
+            raise ValueError("The inspected-subset overfit protocol cannot include extra pretraining")
+        if self.lexical.method == "precomputed" and self.lexical.weight and not self.lexical.annotations:
+            raise ValueError("Precomputed lexical supervision requires annotations")
+        if self.lexical.method == "spacy" and self.lexical.weight and not self.lexical.spacy_model:
+            raise ValueError("Specify a locally prepared spaCy model")
+        if self.data.protocol == "original-paper" and not self.data.original_splits_csv:
+            raise ValueError("Original-paper protocol requires exact externally supplied membership")
+        if "bertscore" in self.evaluation.metrics and not (
+            self.evaluation.bertscore_model and self.evaluation.bertscore_revision
+        ):
+            raise ValueError("BERTScore requires an explicit local model and recorded revision")
+        return self
+
+
+def merge(base: dict, override: dict) -> dict:
+    result = dict(base)
+    for key, value in override.items():
+        result[key] = merge(result[key], value) if isinstance(value, dict) and isinstance(
+            result.get(key), dict) else value
+    return result
+
+
+def load_config(path: str | Path) -> Config:
+    def read(current: Path, stack: tuple[Path, ...]) -> dict:
+        current = current.resolve()
+        if current in stack:
+            raise ValueError(f"Cyclic configuration inheritance: {current}")
+        with current.open(encoding="utf-8") as stream:
+            raw = yaml.safe_load(stream)
+        if not isinstance(raw, dict):
+            raise ValueError(f"Expected YAML mapping: {current}")
+        parent = raw.pop("extends", None)
+        return merge(read(current.parent / parent, (*stack, current)), raw) if parent else raw
+    return Config.model_validate(read(Path(path), ()))

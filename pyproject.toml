@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isl-slt"
+version = "0.1.0"
+description = "Auditable continuous Indian Sign Language to English research"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "numpy>=1.26,<3", "pydantic>=2.10,<3", "PyYAML>=6.0.2,<7",
+  "transformers==4.57.1", "sentencepiece>=0.2,<0.3", "safetensors>=0.4,<1",
+  "huggingface-hub>=0.34,<1", "pose-format>=0.10,<1",
+  "sacrebleu>=2.5,<3", "rouge-score==0.1.2", "nltk>=3.9,<4",
+]
+
+[project.optional-dependencies]
+cpu = ["torch>=2.6,<3", "torchvision>=0.21,<1"]
+rocm = ["torch>=2.6,<3", "torchvision>=0.21,<1"]
+cuda = ["torch>=2.6,<3", "torchvision>=0.21,<1"]
+rgb = ["opencv-python-headless>=4.10,<5"]
+lexical = ["spacy>=3.8,<4"]
+semantic = ["bert-score>=0.3.13,<0.4"]
+notebooks = ["jupyterlab>=4,<5", "ipykernel>=6.29,<8"]
+
+[project.scripts]
+isl-slt = "isl_slt.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "rocm" }, { extra = "cuda" }]]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", extra = "cpu" }, { index = "pytorch-rocm", extra = "rocm" }, { index = "pytorch-cuda", extra = "cuda" }]
+torchvision = [{ index = "pytorch-cpu", extra = "cpu" }, { index = "pytorch-rocm", extra = "rocm" }, { index = "pytorch-cuda", extra = "cuda" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+

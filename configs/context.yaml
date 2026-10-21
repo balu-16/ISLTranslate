@@ -1,0 +1,6 @@
+extends: baseline.yaml
+experiment: context-half-second
+run_dir: runs/context-half-second
+data:
+  target: {metadata_csv: data/metadata/target_timing.csv}
+context: {enabled: true, previous_seconds: 0.5, next_seconds: 0.5, allow_gaps: false}

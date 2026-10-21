@@ -1,0 +1,4 @@
+extends: baseline.yaml
+experiment: weak-lexical
+run_dir: runs/weak-lexical
+lexical: {weight: 0.1, ramp_epochs: 3, method: regex, gradient_diagnostics: true}

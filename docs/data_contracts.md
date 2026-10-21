@@ -1,0 +1,91 @@
+# Data and artifact contracts
+
+All paths below are relative to the repository working directory. Supply real assets and provenance before running preparation. No datasets, weights or generated manifests are bundled. The canonical record implementation is `src/isl_slt/data/manifests.py`; configuration validation is in `src/isl_slt/config.py`.
+
+## Annotation adapters
+
+`data.target` configures the primary annotations and pose directory. `data.pretrain` is absent in the baseline and explicitly configured for transfer. Each adapter declares a dataset name, exact dataset revision, annotation revision, paths and column aliases. `dataset_revision: REQUIRED` intentionally prevents manifest creation.
+
+Default target CSV headers are `uid,text`. Aliases are explicit lists under `columns`; exactly one candidate for each field must appear. Missing/duplicated headers, ambiguous aliases and malformed rows fail. A UID must be a nonempty filename-safe identifier with no path separators or NUL characters.
+
+The interpreter CSV defaults to `uid,Transcribed Text,Gold Translation`. It attaches the supplied transcript and interpreter translation to known target UIDs. Duplicate or unknown UIDs fail, and transcript disagreements are reported. An interpreter row does not replace the primary target label.
+
+Raw annotations remain unchanged. Optional correction JSONL contains exactly `uid,text,revision,provenance` per entry. Corrections must identify unique known UIDs and carry provenance; corrected text receives a separate annotation revision.
+
+## Parent-source identity
+
+The authoritative source mapping CSV requires these columns:
+
+| Column | Meaning |
+| --- | --- |
+| `uid` | Exact annotation UID, unique in the mapping |
+| `source_id` | Identity of the original parent recording |
+| `verified` | `true` or `false` |
+| `provenance` | Evidence supporting the source assignment |
+
+The same source identity must mean the same recording across target and transfer datasets. Authoritative mappings override inferred or metadata identities. Verified records require both identity and provenance.
+
+The default candidate parser recognizes a final hyphen plus numeric sequence suffix while preserving all earlier hyphens. Its inferred identity remains unverified. Filename structure alone does not prove parent identity, chronological adjacency or continuity. The default `source-held-out` protocol requires verified sources. `exploratory-unverified` is a separately named protocol and must be reported as such.
+
+## Optional metadata CSV
+
+Set `metadata_csv` before auditing when timing, coordinate, person or RGB metadata is needed. Rows have unique `uid` keys and use canonical record field names. Unknown columns fail; empty cells leave defaults in place. Metadata cannot supply target text, dataset identity/revision or split membership.
+
+| Fields | Contract |
+| --- | --- |
+| `fps` | Finite positive extraction rate; conflicts with a valid pose-header rate fail |
+| `timestamps_path` | Path to a JSON array containing one strictly increasing finite offset in seconds per pose frame |
+| `start_seconds`, `end_seconds` | Supply both or neither; nonnegative increasing source-relative clip bounds |
+| `source_duration_seconds` | Positive total duration including the full center clip, when verified |
+| `timing_verified` | `true` only with supporting clip bounds and timing provenance |
+| `coordinate_space` | `image_pixels` or `normalized_image`, based on extraction provenance |
+| `person_index` | Nonnegative explicit stored-person index |
+| `image_transform` | JSON 2×3 affine matrix mapping pose-header pixels to decoded-video pixels |
+| `sequence_index` | Optional integer ordering hint; not proof of continuity |
+| `duplicate_fingerprints` | JSON list of known content-duplicate identifiers |
+| `asset_hashes` | JSON object of supplied asset checksums, checked against local bytes during audit |
+| `annotation_revision`, `correction_provenance` | Explicit annotation provenance where applicable |
+
+JSON-valued CSV cells need normal CSV quoting. Boolean cells use `true` or `false`. The full canonical schema also holds paths and source/interpreter fields; use those deliberately, preserving authoritative source-map precedence.
+
+Timestamp offsets must fit verified clip duration before the reader adds `start_seconds`. Without a timestamp array, actual positive extraction FPS is required. Irregular sampling must use real timestamps. No arbitrary FPS is invented to enable context or synchronization.
+
+## Pose decoding and validity
+
+The reader accepts actual `pose-format` headers describing `XYC` or `XYZC` components and nonempty `[time, people, joints, dimensions]` arrays. Landmark names/counts must uniquely match the data. Multiple people need an explicit `person_index`; no automatic signer choice is assumed.
+
+Stored masks, finite coordinates and configured component confidence thresholds jointly determine validity. Low-confidence landmarks cannot become observations through zero filling. Components without an extra threshold still retain their stored masks. Absent depth stays invalid.
+
+Image-normalized XY is converted using verified positive pose-header width and height. Baseline normalization then uses shoulders in pixel space. Invalid anchors, short-gap interpolation, motion discontinuities and padded frames have separate masks. Feature preparation does not pretend these operations recover missing signing information.
+
+## Context and RGB prerequisites
+
+Context requires verified parent identity, verified timing, compatible pose metadata and real coverage of the requested previous/following time windows. Context is assembled only from the same immutable partition. Source duration distinguishes a true recording endpoint from missing coverage. Unknown gaps fail by default; enabling `allow_gaps` is an explicit protocol choice.
+
+RGB additionally requires actual videos, synchronized frame times and an explicit pose-to-video affine transform. An identity matrix is valid only after confirming the geometries agree. Crop validity is retained; hand mode can use an upper-body fallback. Missing or stale RGB assets fail an RGB experiment, while pose-only operation does not need videos.
+
+## Audit and immutable manifests
+
+Audit creates canonical JSONL manifests and adjacent `.audit.json` reports. Each record includes dataset/annotation revisions, original paths, source provenance, label, optional interpreter references and relevant metadata. Existing pose/video/timestamp bytes are hashed, and pose/video SHA256 fingerprints contribute to exact duplicate checks.
+
+Audit reports expose duplicate/conflicting UIDs, empty labels, missing assets, repeated texts, source-verification coverage, interpreter conflicts, pose issues and requested context/RGB availability. Review the reports before training. A written report is not evidence that every reported issue is acceptable. Repeated text alone is not a content duplicate and remains in the dataset.
+
+Immutable writes accept identical content and reject changed content at the same manifest path. Correcting inputs or metadata requires new manifest/split paths and a documented revision. Missing perceptual fingerprints mean near-duplicate contamination remains untested.
+
+## Splits and transfer
+
+The standard split reserves every parent source containing an interpreter example in `gold`. Remaining parents are assigned deterministically to train/validation/test, approximating 80/10/10 by example count while preserving complete groups. A usable allocation needs at least three nongold source groups and nonempty primary partitions. Gold can contain other clips from the reserved parents; interpreter scoring applies only where an interpreter reference exists.
+
+`original-paper` requires externally supplied exact `uid,split` membership. Matching a paper's example counts does not establish matching membership. Gold-parent and source-disjointness constraints still apply.
+
+Split output contains `train.jsonl`, `validation.jsonl`, `test.jsonl`, `gold.jsonl`, `splits.json` and `leakage.json`. Transfer adds `pretrain.jsonl` and `pretraining-filter.json`. Membership hashes cover canonical record content. Loading splits rechecks hashes, source/UID/known-content disjointness and filter metadata; changing the training seed does not recreate memberships.
+
+Additional pretraining excludes unresolved/unverified sources, all target UIDs, target held-out parents and known target or within-pool duplicates. Sharing a verified parent with target training can be permitted for otherwise distinct eligible examples; held-out target parents remain excluded. Actual eligible counts come from the contamination report.
+
+## Feature and model assets
+
+Pose caches use non-pickle `.npz` arrays with JSON metadata under a preprocessing fingerprint. Signatures include record identity, revisions, local assets and context dependencies. Readers reject schema/checksum mismatches. RGB signatures also include video geometry, crop/synchronization policy and initializer identity. Never edit cache arrays to silence a compatibility error.
+
+`prepare-model --allow-network` is the explicit model-download step. T5 assets are bound to repository, requested revision, resolved commit and file hashes in `asset.json`. The prepared generic initializer is distinct from task-specific trained checkpoints. Optional local spaCy, WordNet and BERTScore resources must be supplied explicitly.
+
+See the [data directory guide](../data/README.md), [artifact directory guide](../artifacts/README.md) and [runbook](runbook.md) for placement and commands.

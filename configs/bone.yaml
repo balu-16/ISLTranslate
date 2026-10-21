@@ -1,0 +1,4 @@
+extends: baseline.yaml
+experiment: bone
+run_dir: runs/bone
+features: {bones: true}

@@ -1,0 +1,11 @@
+extends: rgb_cached.yaml
+experiment: rgb-last-block
+run_dir: runs/rgb-last-block
+rgb: {mode: images, pixel_augmentation: true}
+training:
+  micro_batch_size: 1
+  max_frames_per_batch: 1000
+  stages:
+    - {name: image-adapter, dataset: target, epochs: 1, freeze_t5: true}
+    - {name: image-joint, dataset: target, epochs: 17, freeze_t5: false}
+    - {name: final-rgb-block, dataset: target, epochs: 2, freeze_t5: false, tune_rgb: true}
