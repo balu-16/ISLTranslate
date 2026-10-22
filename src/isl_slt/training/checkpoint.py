@@ -7,7 +7,7 @@ import torch
 
 from isl_slt.config import Config
 from isl_slt.features.cache import preprocessing_fingerprint
-from isl_slt.utils.io import atomic_open, file_hash, fingerprint
+from isl_slt.utils.io import atomic_open, execution_identity, file_hash, fingerprint
 from isl_slt.features.statistics import load_statistics
 
 
@@ -43,7 +43,7 @@ def compatibility(config: Config, input_dim: int, split_metadata: dict, tokenize
                   lexicon: dict | None, rgb_initializer: dict | None = None,
                   feature_artifacts: dict | None = None) -> dict:
     statistics = load_statistics(config, split_metadata["hashes"]["train"])
-    return {"statistics": statistics["signature"] if statistics else None,
+    return {"execution_identity": execution_identity(), "statistics": statistics["signature"] if statistics else None,
             "architecture": fingerprint({"model": config.model.model_dump(mode="json"), "input_dim": input_dim,
                                          "rgb": config.rgb.model_dump(mode="json")}),
             "feature_schema": preprocessing_fingerprint(config), "split_hashes": split_metadata["hashes"],
@@ -52,7 +52,8 @@ def compatibility(config: Config, input_dim: int, split_metadata: dict, tokenize
             "feature_artifacts": feature_artifacts,
             "numerical_policy": {"precision": config.runtime.precision,
                                   "recurrent_fp32": config.runtime.recurrent_fp32,
-                                  "deterministic": config.runtime.deterministic},
+                                  "deterministic": config.runtime.deterministic,
+                                  "determinism_mode": config.runtime.determinism_mode},
             "lexicon": fingerprint(lexicon) if lexicon is not None else None,
             "experiment": fingerprint({"training": config.training.model_dump(mode="json"),
                                         "lexical": config.lexical.model_dump(mode="json"),
@@ -62,6 +63,23 @@ def compatibility(config: Config, input_dim: int, split_metadata: dict, tokenize
 def save_checkpoint(path: str | Path, payload: dict) -> None:
     with atomic_open(path) as stream:
         torch.save(payload, stream)
+
+
+def validate_resume_compatibility(saved: dict, expected: dict, allow_code_change=False) -> dict | None:
+    if {key: value for key, value in saved.items() if key != "execution_identity"} != {
+        key: value for key, value in expected.items() if key != "execution_identity"
+    }:
+        raise ValueError("Resume data/model/tokenizer/cache/numerical compatibility mismatch")
+    before, after = saved.get("execution_identity"), expected.get("execution_identity")
+    if before is None or after is None:
+        raise ValueError("Legacy checkpoint lacks code/environment identity; exact resume cannot be established")
+    if before["environment"] != after["environment"]:
+        raise ValueError("Resume environment/lock mismatch; --allow-code-change cannot bypass it")
+    if before["code"] != after["code"]:
+        if not allow_code_change:
+            raise ValueError("Resume code identity mismatch; use --allow-code-change only for a recorded code transition")
+        return {"previous_code": before["code"], "current_code": after["code"]}
+    return None
 
 
 def inference_payload(payload: dict) -> dict:

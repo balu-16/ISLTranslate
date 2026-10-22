@@ -17,7 +17,7 @@ from isl_slt.evaluation.generation import select_decoding
 from isl_slt.losses.objectives import loss_for_window, window_denominators
 from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import bundle_tokenizer, compatibility, load_checkpoint, restore_tokenizer, save_checkpoint
-from isl_slt.training.checkpoint import guarded_improvement, inference_payload
+from isl_slt.training.checkpoint import guarded_improvement, inference_payload, validate_resume_compatibility
 from isl_slt.utils.io import append_event, file_hash, read_json, versions, write_json, write_jsonl
 from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything
 
@@ -139,7 +139,7 @@ def update_window(model, optimizer, scheduler, scaler, batches, config: Config, 
             "gradient_norm": float(gradient_norm) if finite else None, "gradient_diagnostics": diagnostics}
 
 
-def run_training(config: Config, resume: str | None = None) -> dict:
+def run_training(config: Config, resume: str | None = None, allow_code_change: bool = False) -> dict:
     partitions, split_metadata = checked_splits(config.data)
     context_partitions = dict(partitions)
     partitions = dict(partitions)
@@ -206,8 +206,10 @@ def run_training(config: Config, resume: str | None = None) -> dict:
     artifacts = {name: dataset.cache_fingerprint for name, dataset in datasets.items()}
     artifacts["validation"] = validation.cache_fingerprint
     expected = compatibility(config, input_dim, split_metadata, tokenizer_bundle, lexical_payload, rgb_initializer, artifacts)
-    if restored is not None and restored["compatibility"] != expected:
-        raise ValueError("Resume fingerprint mismatch; do not change data, tokenizer, features or experiment")
+    if restored is not None:
+        transition = validate_resume_compatibility(restored["compatibility"], expected, allow_code_change)
+        if transition:
+            append_event(root / "events.jsonl", kind="code_change_override", **transition)
     model = build_model(config, input_dim, tokenizer, len(lexicon.words) if lexicon else 0,
                         checkpoint_t5_config=restored["t5_config"] if restored else None,
                         restoring=restored is not None).to(device)

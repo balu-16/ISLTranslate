@@ -26,6 +26,7 @@ def parser() -> argparse.ArgumentParser:
         if name in ("train", "overfit"):
             sub.add_argument("--resume")
             sub.add_argument("--seed", type=int)
+            sub.add_argument("--allow-code-change", action="store_true")
         if name == "overfit":
             sub.add_argument("--uids", required=True)
         if name in ("evaluate", "predict", "diagnostics", "benchmark"):
@@ -98,7 +99,7 @@ def dispatch(args) -> dict | list:
         return prepare_model(config, args.allow_network)
     if command in ("train", "overfit"):
         from isl_slt.training.engine import run_training
-        return run_training(config, args.resume)
+        return run_training(config, args.resume, args.allow_code_change)
     if command == "evaluate":
         from isl_slt.workflows import evaluate
         report = evaluate(config, args.checkpoint, args.partition, args.output, args.decoding)

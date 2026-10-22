@@ -1,5 +1,18 @@
 from isl_slt.training.checkpoint import guarded_improvement
 from isl_slt.training.checkpoint import inference_payload, load_checkpoint, save_checkpoint, tokenizer_hash
+from isl_slt.training.checkpoint import validate_resume_compatibility
+import pytest
+
+
+def test_code_override_cannot_bypass_environment_or_data():
+    saved = {"architecture": "same", "execution_identity": {"code": {"hash": "old"}, "environment": {"lock": "same"}}}
+    changed = {"architecture": "same", "execution_identity": {"code": {"hash": "new"}, "environment": {"lock": "same"}}}
+    with pytest.raises(ValueError, match="code identity"):
+        validate_resume_compatibility(saved, changed)
+    assert validate_resume_compatibility(saved, changed, True)
+    changed["execution_identity"]["environment"] = {"lock": "different"}
+    with pytest.raises(ValueError, match="environment"):
+        validate_resume_compatibility(saved, changed, True)
 
 
 def test_inference_snapshot_retains_reconstruction_fields(tmp_path):
