@@ -45,6 +45,8 @@ References: [uv PyTorch integration](https://docs.astral.sh/uv/guides/integratio
 
 Create private `.env` from `.env.example` only if it does not already exist. Set `HF_TOKEN` there or in the process environment; the template also declares `HF_HOME`, `NLTK_DATA` and tokenizer parallelism. Credentials stay out of YAML, notebook outputs, checkpoints and logs.
 
+The shared template sets no NVIDIA workspace variable. Remove an old copied `CUBLAS_WORKSPACE_CONFIG` entry when configuring ROCm; runtime applies NVIDIA policy only on a non-HIP build.
+
 Add `--env-file .env` to commands needing these settings. Ordinary model loading uses local assets. Only explicit `prepare-model --allow-network` obtains project model weights; dataset acquisition and optional language resources have separate preparation commands below. See [local storage layout](data_contracts.md#local-storage-layout) for placement.
 
 ## Notebook workflow
