@@ -17,6 +17,24 @@ def test_code_override_cannot_bypass_environment_or_data():
         validate_resume_compatibility(saved, changed, True)
 
 
+def test_resume_ignores_unrelated_inventory_and_requires_environment_override():
+    saved = {"architecture": "same", "execution_identity": {"code": {"hash": "same"}, "environment": {
+        "compatibility": {"packages": {"torch": "2.test"}}, "provenance": {"unrelated": "old"}}}}
+    import copy
+    changed = copy.deepcopy(saved)
+    changed["execution_identity"]["environment"]["provenance"]["unrelated"] = "new"
+    result = validate_resume_compatibility(saved, changed)
+    assert "environment_provenance_change" in result and "exact_resume" not in result
+    changed["execution_identity"]["environment"]["compatibility"]["packages"]["torch"] = "changed"
+    with pytest.raises(ValueError, match="allow-environment-change"):
+        validate_resume_compatibility(saved, changed, allow_code_change=True)
+    result = validate_resume_compatibility(saved, changed, allow_environment_change=True)
+    assert result["exact_resume"] is False and result["environment_change"]
+    changed["architecture"] = "different"
+    with pytest.raises(ValueError, match="compatibility mismatch"):
+        validate_resume_compatibility(saved, changed, True, True)
+
+
 def test_inference_snapshot_retains_reconstruction_fields(tmp_path):
     payload = {"format": "isl-slt-checkpoint-v1", "tokenizer": {},
                "compatibility": {"tokenizer": tokenizer_hash({})},

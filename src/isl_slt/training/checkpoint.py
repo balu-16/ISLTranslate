@@ -11,7 +11,7 @@ import torch
 
 from isl_slt.config import Config
 from isl_slt.features.cache import preprocessing_fingerprint
-from isl_slt.utils.io import atomic_open, execution_identity, file_hash, fingerprint
+from isl_slt.utils.io import atomic_open, execution_identity, file_hash, fingerprint, identity_diff
 from isl_slt.features.statistics import load_statistics
 
 
@@ -47,7 +47,9 @@ def compatibility(config: Config, input_dim: int, split_metadata: dict, tokenize
                   lexicon: dict | None, rgb_initializer: dict | None = None,
                   feature_artifacts: dict | None = None) -> dict:
     statistics = load_statistics(config, split_metadata["hashes"]["train"])
-    return {"execution_identity": execution_identity(), "statistics": statistics["signature"] if statistics else None,
+    extras = [name for name, enabled in (("rgb", config.rgb.mode != "off"),
+        ("lexical", config.lexical.method == "spacy" and config.lexical.weight > 0)) if enabled]
+    return {"execution_identity": execution_identity(extras=extras), "statistics": statistics["signature"] if statistics else None,
             "architecture": fingerprint({"model": config.model.model_dump(mode="json"), "input_dim": input_dim,
                                          "rgb": config.rgb.model_dump(mode="json")}),
             "feature_schema": preprocessing_fingerprint(config), "split_hashes": split_metadata["hashes"],
@@ -69,7 +71,8 @@ def save_checkpoint(path: str | Path, payload: dict) -> None:
         torch.save(payload, stream)
 
 
-def validate_resume_compatibility(saved: dict, expected: dict, allow_code_change=False) -> dict | None:
+def validate_resume_compatibility(saved: dict, expected: dict, allow_code_change=False,
+                                  allow_environment_change=False) -> dict | None:
     if {key: value for key, value in saved.items() if key != "execution_identity"} != {
         key: value for key, value in expected.items() if key != "execution_identity"
     }:
@@ -77,13 +80,22 @@ def validate_resume_compatibility(saved: dict, expected: dict, allow_code_change
     before, after = saved.get("execution_identity"), expected.get("execution_identity")
     if before is None or after is None:
         raise ValueError("Legacy checkpoint lacks code/environment identity; exact resume cannot be established")
-    if before["environment"] != after["environment"]:
-        raise ValueError("Resume environment/lock mismatch; --allow-code-change cannot bypass it")
+    changes = {}
+    old_env, new_env = before["environment"], after["environment"]
+    old_contract, new_contract = old_env.get("compatibility", old_env), new_env.get("compatibility", new_env)
+    if old_contract != new_contract:
+        if not allow_environment_change:
+            raise ValueError("Resume environment mismatch; --allow-environment-change is required for non-exact continuation")
+        changes["environment_change"] = identity_diff(old_env, new_env)
+        changes["exact_resume"] = False
+    elif old_env != new_env:
+        changes["environment_provenance_change"] = identity_diff(old_env, new_env)
     if before["code"] != after["code"]:
         if not allow_code_change:
             raise ValueError("Resume code identity mismatch; use --allow-code-change only for a recorded code transition")
-        return {"previous_code": before["code"], "current_code": after["code"]}
-    return None
+        changes["code_change"] = {"previous_code": before["code"], "current_code": after["code"]}
+        changes["exact_resume"] = False
+    return changes or None
 
 
 def inference_payload(payload: dict) -> dict:

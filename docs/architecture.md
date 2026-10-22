@@ -91,7 +91,7 @@ Per-epoch validation uses `generation.train_beams`, default [1]. Final validatio
 
 Only `last.pt` is resumable. Best/epoch snapshots retain model/T5 configuration, input dimensions, tokenizer, lexicon, feature statistics, RGB initializer, decoding state, compatibility and provenance, while dropping optimizer/scheduler/scaler/RNG. Averaging preserves these reconstruction fields and clears stale decoding.
 
-Resume binds source bytes, Git commit/dirty state, Python/platform, actual package versions and lock/pyproject identity. A code-change override is explicit and logged; it never bypasses data, environment or numerical policy. Strict determinism remains default; warn-only behavior is an explicit debugging mode.
+Resume gates declared runtime dependency versions, Python minor and torch/CUDA/HIP builds. Full installed-package/platform/lock inventories remain provenance, so unrelated notebook packages do not block continuation. `--allow-environment-change` logs a full diff and marks continuation non-exact; it is separate from `--allow-code-change`. Neither overrides data/model/cache/numerical contracts or incompatible RNG topology. Old environment identities require an explicit transition. Strict determinism remains default.
 
 Dataset construction verifies cache arrays once. Per-item fetches check immutable file identities and manifest-bound metadata. Indexed source timelines and command-scoped signatures avoid global context scans and repeated raw hashing. Worker count remains zero until profiled; persistent workers are enabled only with workers > 0 and custom batches support GPU pinning.
 

@@ -140,17 +140,19 @@ def update_window(model, optimizer, scheduler, scaler, batches, config: Config, 
             "gradient_norm": float(gradient_norm) if finite else None, "gradient_diagnostics": diagnostics}
 
 
-def run_training(config: Config, resume: str | None = None, allow_code_change: bool = False) -> dict:
+def run_training(config: Config, resume: str | None = None, allow_code_change: bool = False,
+                 allow_environment_change: bool = False) -> dict:
     if config.training.debug_only and not config.training.overfit_uids:
         raise ValueError("Debug-only training requires overfit --uids with 32–64 inspected training UIDs")
     with directory_lock(config.run_dir):
         for temporary in (Path(config.run_dir) / "checkpoints").glob(".last.pt.*"):
             if temporary.is_file() and not temporary.is_symlink():
                 temporary.unlink()
-        return _run_training(config, resume, allow_code_change)
+        return _run_training(config, resume, allow_code_change, allow_environment_change)
 
 
-def _run_training(config: Config, resume: str | None = None, allow_code_change: bool = False) -> dict:
+def _run_training(config: Config, resume: str | None = None, allow_code_change: bool = False,
+                  allow_environment_change: bool = False) -> dict:
     partitions, split_metadata = checked_splits(config.data)
     context_partitions = dict(partitions)
     partitions = dict(partitions)
@@ -176,7 +178,7 @@ def _run_training(config: Config, resume: str | None = None, allow_code_change: 
         restored = load_checkpoint(resume)
         if restored.get("inference_only"):
             raise ValueError("Averaged inference checkpoints cannot resume optimizer training")
-        if restored["runtime_backend"] != backend:
+        if restored["runtime_backend"] != backend and not allow_environment_change:
             raise ValueError("Exact training resume requires the same PyTorch/backend/device; inference may use another backend")
         restore_tokenizer(restored["tokenizer"], root / "tokenizer")
         tokenizer = load_tokenizer(config, root / "tokenizer")
@@ -224,10 +226,14 @@ def _run_training(config: Config, resume: str | None = None, allow_code_change: 
     if any((dataset.statistics["signature"] if dataset.statistics else None) != expected["statistics"]
            for dataset in [*datasets.values(), validation]):
         raise ValueError("Feature statistics changed across dataset preparation or checkpoint binding")
+    transition = None
     if restored is not None:
-        transition = validate_resume_compatibility(restored["compatibility"], expected, allow_code_change)
+        transition = validate_resume_compatibility(restored["compatibility"], expected, allow_code_change, allow_environment_change)
+        if restored["runtime_backend"] != backend:
+            transition = {**(transition or {}), "runtime_backend_change": {
+                "previous": restored["runtime_backend"], "current": backend}, "exact_resume": False}
         if transition:
-            append_event(root / "events.jsonl", kind="code_change_override", **transition)
+            append_event(root / "events.jsonl", kind="resume_identity_transition", **transition)
     model = build_model(config, input_dim, tokenizer, len(lexicon.words) if lexicon else 0,
                         checkpoint_t5_config=restored["t5_config"] if restored else None,
                         restoring=restored is not None).to(device)
@@ -244,6 +250,8 @@ def _run_training(config: Config, resume: str | None = None, allow_code_change: 
         scheduler.load_state_dict(restored["scheduler"])
         scaler.load_state_dict(restored["scaler"])
         state, run_id = restored["state"], restored["run_id"]
+        if transition and transition.get("exact_resume") is False:
+            state["exact_resume"] = False
         restore_rng(restored["rng"])
     write_json(root / "resolved.json", config.model_dump(mode="json"))
     write_json(root / "compatibility.json", expected)

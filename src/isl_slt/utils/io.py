@@ -138,7 +138,7 @@ def append_event(path: str | Path, **event: Any) -> None:
         stream.write(canonical(event) + b"\n")
 
 
-def execution_identity(root: str | Path | None = None) -> dict:
+def execution_identity(root: str | Path | None = None, extras=()) -> dict:
     """Bind continuation to actual source bytes and resolved environment, without credentials."""
     package = Path(__file__).resolve().parents[1]
     root = Path(root).resolve() if root else Path.cwd().resolve()
@@ -155,7 +155,37 @@ def execution_identity(root: str | Path | None = None) -> dict:
         pass
     packages = sorted((distribution.metadata.get("Name", "").lower().replace("_", "-"), distribution.version)
                       for distribution in importlib.metadata.distributions())
-    environment = {"python": platform.python_version(), "platform": platform.platform(), "packages": packages,
-                   "lock_sha256": file_hash(root / "uv.lock") if (root / "uv.lock").is_file() else None,
-                   "pyproject_sha256": file_hash(root / "pyproject.toml") if (root / "pyproject.toml").is_file() else None}
+    import tomllib
+    from packaging.requirements import Requirement
+    import torch
+    declaration = root / "pyproject.toml"
+    if declaration.is_file():
+        with declaration.open("rb") as stream:
+            project = tomllib.load(stream)["project"]
+        requirements = list(project["dependencies"])
+        for extra in extras:
+            requirements.extend(project.get("optional-dependencies", {}).get(extra, []))
+    else:
+        requirements = importlib.metadata.requires("isl-slt") or []
+    names = {"torch", "torchvision"}
+    for raw in requirements:
+        requirement = Requirement(raw)
+        if requirement.marker is None or any(requirement.marker.evaluate({"extra": extra}) for extra in ("", *extras)):
+            names.add(requirement.name.lower().replace("_", "-"))
+    inventory = dict(packages)
+    environment = {"format": "isl-slt-environment-v2", "compatibility": {
+        "python": ".".join(platform.python_version_tuple()[:2]),
+        "packages": {name: inventory.get(name) for name in sorted(names)},
+        "torch": str(torch.__version__), "cuda": torch.version.cuda, "hip": torch.version.hip},
+        "provenance": {"python": platform.python_version(), "platform": platform.platform(), "packages": packages,
+            "declared_requirements": sorted(requirements),
+            "lock_sha256": file_hash(root / "uv.lock") if (root / "uv.lock").is_file() else None,
+            "pyproject_sha256": file_hash(declaration) if declaration.is_file() else None}}
     return {"code": code, "environment": environment}
+
+
+def identity_diff(before, after, prefix="") -> list[dict]:
+    if isinstance(before, dict) and isinstance(after, dict):
+        return [entry for key in sorted(before.keys() | after.keys())
+                for entry in identity_diff(before.get(key), after.get(key), f"{prefix}.{key}" if prefix else key)]
+    return [] if before == after else [{"field": prefix, "previous": before, "current": after}]

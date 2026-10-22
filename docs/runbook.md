@@ -179,7 +179,7 @@ Continue a matching saved trajectory with:
 uv run --no-sync python -m isl_slt train --config configs/baseline.yaml --resume runs/baseline/checkpoints/last.pt
 ```
 
-Resume checks data/cache/tokenizer/experiment/numerical fingerprints, backend, source/Git identity, actual packages and lock/pyproject hashes. --allow-code-change records only a code transition; it cannot bypass environment or data mismatches. A new run cannot reuse an existing run directory without an explicit resume. If a wall-time limit returns `wall_time_limit`, retain `last.pt` and resume with the same compatible setup.
+Resume checks data/cache/tokenizer/experiment/numerical fingerprints, source/Git identity and declared dependency/Python-minor/torch/CUDA/HIP versions. Full package and lock inventories are provenance. `--allow-code-change` approves only code changes; `--allow-environment-change` separately approves environment differences, logs the full diff and labels continuation non-exact. Neither bypasses data/model/numerical or RNG-topology requirements. A new run cannot reuse an existing run directory without explicit resume. If a wall-time limit returns `wall_time_limit`, retain `last.pt` and resume with the same compatible setup.
 
 ## 8. Prepare scoring resources and evaluate
 
