@@ -141,6 +141,8 @@ def update_window(model, optimizer, scheduler, scaler, batches, config: Config, 
 
 
 def run_training(config: Config, resume: str | None = None, allow_code_change: bool = False) -> dict:
+    if config.training.debug_only and not config.training.overfit_uids:
+        raise ValueError("Debug-only training requires overfit --uids with 32–64 inspected training UIDs")
     partitions, split_metadata = checked_splits(config.data)
     context_partitions = dict(partitions)
     partitions = dict(partitions)

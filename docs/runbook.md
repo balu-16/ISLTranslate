@@ -161,6 +161,8 @@ uv run --no-sync python -m isl_slt overfit --config configs/overfit.yaml --uids 
 
 The protocol fits and selects on those training examples, records a diagnostic partition and excludes extra pretraining. Inspect loss/gradients/generated text; there is no BLEU threshold or held-out quality claim.
 
+The preset is `training.debug_only: true`: ordinary training without an explicit UID file fails before split loading. In the notebook select `configs/overfit.yaml`, set `OVERFIT_UIDS_PATH` and use the dedicated overfit cell. Debug resume uses the same `overfit --uids` invocation plus `--resume`.
+
 ## 7. Train and resume the baseline
 
 ```bash

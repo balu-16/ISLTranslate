@@ -139,6 +139,7 @@ class Stage(Strict):
 
 
 class Training(Strict):
+    debug_only: bool = False
     seed: int = Field(default=42, ge=0, le=4294967295)
     optimizer: Literal["AdamW"] = "AdamW"
     lr_new_layers: float = Field(default=3e-4, gt=0)
