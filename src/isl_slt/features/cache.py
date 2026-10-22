@@ -57,12 +57,12 @@ def write_features(config: Config, record: Record, prepared: Prepared, dependenc
 
 
 def read_features(config: Config, record: Record, dependencies: list[Record] | None = None,
-                  verify_assets: bool = False) -> Prepared:
+                  verify_assets: bool = False, verify_arrays: bool = True) -> Prepared:
     arrays_path, metadata_path = cache_paths(config, record)
     metadata = read_json(metadata_path)
     if metadata["version"] != CACHE_VERSION or metadata["preprocessing"] != preprocessing_fingerprint(config):
         raise ValueError(f"{record.uid}: stale/incompatible feature cache")
-    if metadata["record_key"] != record.key or file_hash(arrays_path) != metadata["arrays_sha256"]:
+    if metadata["record_key"] != record.key or (verify_arrays and file_hash(arrays_path) != metadata["arrays_sha256"]):
         raise ValueError(f"{record.uid}: cache identity or array checksum mismatch")
     candidates = dependencies if dependencies is not None else [record]
     signatures = [record_signature(row, verify_assets) for row in sorted(candidates, key=lambda r: r.key)]

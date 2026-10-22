@@ -52,6 +52,8 @@ class Data(Strict):
     original_splits_csv: str | None = None
     workers: int = Field(default=0, ge=0)
     verify_assets: bool = False
+    persistent_workers: bool = True
+    pin_memory: bool = True
 
 
 class Features(Strict):

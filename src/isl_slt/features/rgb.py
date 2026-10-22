@@ -183,12 +183,12 @@ def write_rgb(config: Config, record: Record, dependencies: list[Record], values
 
 
 def read_rgb(config: Config, record: Record, dependencies: list[Record], times: np.ndarray,
-             verify_assets: bool = False):
+             verify_assets: bool = False, verify_arrays: bool = True):
     arrays, meta = rgb_paths(config, record)
     metadata = read_json(meta)
     incompatible_assets = metadata["signature"] != rgb_signature(config, record, dependencies, verify_assets,
                                                                 metadata["signature"]["weights_sha256"])
-    if incompatible_assets or metadata["sha256"] != file_hash(arrays):
+    if incompatible_assets or (verify_arrays and metadata["sha256"] != file_hash(arrays)):
         raise ValueError(f"{record.uid}: incompatible RGB cache; regenerate it explicitly")
     with np.load(arrays, allow_pickle=False) as loaded:
         if not np.array_equal(times, loaded["times"]):

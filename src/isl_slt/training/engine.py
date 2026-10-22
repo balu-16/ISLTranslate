@@ -89,7 +89,9 @@ def loader_for(dataset, tokenizer, config: Config, *, training: bool, offset: in
     batches = sampler.batches()[offset:]
     generator = torch.Generator().manual_seed(config.training.seed + dataset.epoch)
     return DataLoader(dataset, batch_sampler=batches, collate_fn=Collator(tokenizer, labels=training),
-                      num_workers=config.data.workers, generator=generator), sampler
+                      num_workers=config.data.workers, generator=generator,
+                      persistent_workers=config.data.persistent_workers and config.data.workers > 0,
+                      pin_memory=config.data.pin_memory and config.runtime.device != "cpu" and torch.cuda.is_available()), sampler
 
 
 def update_window(model, optimizer, scheduler, scaler, batches, config: Config, device, weight: float) -> dict:

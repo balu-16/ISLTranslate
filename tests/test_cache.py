@@ -8,6 +8,35 @@ from isl_slt.data.dataset import PoseDataset
 from isl_slt.features.cache import read_features, write_features
 from isl_slt.features.pose import Prepared
 from isl_slt.utils.io import file_hash
+from isl_slt.data.dataset import Collator
+from torch.utils.data import DataLoader
+
+
+def test_preflight_hashes_once_and_rejects_later_mutation(tmp_path, record_factory, monkeypatch):
+    from isl_slt.features import cache
+    record, config = cached_example(tmp_path, record_factory)
+    calls = []
+    original = cache.file_hash
+    def counted(path):
+        calls.append(str(path))
+        return original(path)
+    monkeypatch.setattr(cache, "file_hash", counted)
+    dataset = PoseDataset([record], config)
+    preflight_calls = len(calls)
+    dataset[0]
+    dataset[0]
+    assert len(calls) == preflight_calls
+    arrays, _ = cache.cache_paths(config, record)
+    arrays.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="changed during"):
+        dataset[0]
+
+
+def test_worker_loader_iterates_validated_cache(tmp_path, record_factory):
+    record, config = cached_example(tmp_path, record_factory)
+    dataset = PoseDataset([record], config)
+    loader = DataLoader(dataset, batch_size=1, num_workers=2, collate_fn=Collator(labels=False))
+    assert sum(len(batch.records) for batch in loader) == 1
 
 
 def cached_example(tmp_path, record_factory):
