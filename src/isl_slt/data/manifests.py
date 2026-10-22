@@ -16,6 +16,7 @@ from isl_slt.utils.io import fingerprint, read_jsonl, write_jsonl
 
 class Record(Strict):
     uid: str
+    clip_type: Literal["sentence", "def", "unknown"] = "unknown"
     source_id: str | None = None
     source_verified: bool = False
     source_provenance: str | None = None
@@ -206,6 +207,9 @@ def adapt_csv(adapter: Adapter, audit: dict | None = None) -> list[Record]:
                   "coordinate_space": adapter.coordinate_space, **metadata.get(uid, {}), **values}
         # Authoritative source mappings override any metadata or annotation source guesses.
         values.update(overrides.get(uid, {}))
+        if "clip_type" not in values:
+            _, rule, _ = source_candidate(uid, Adapter().candidate_uid_patterns)
+            values["clip_type"] = {"sentence-suffix": "sentence", "def-tag": "def"}.get(rule, "unknown")
         records.append(Record.model_validate({"dataset_name": adapter.dataset_name,
             "dataset_revision": adapter.dataset_revision, "annotation_revision": adapter.annotation_revision, **values}))
     if adapter.corrections_jsonl:

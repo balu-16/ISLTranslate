@@ -34,6 +34,7 @@ def generate_loader(model, tokenizer, loader, config: Config, device: torch.devi
         decoded = decode_tokens(tokenizer, tokens, config.generation.max_new_tokens)
         for record, prediction, length in zip(batch.records, decoded, batch.visual["lengths"].tolist()):
             rows.append({"uid": record.uid, "source_id": record.source_id, "dataset": record.dataset_name,
+                         "clip_type": record.clip_type,
                          "references": [record.text], "interpreter_reference": record.interpreter_text,
                          "input_frames": length, "split": record.split, **prediction})
     return rows
@@ -44,6 +45,15 @@ def score_rows(rows: list[dict], config: Config, metrics: list[str] | None = Non
                                metrics or config.evaluation.metrics, config.evaluation.bertscore_model,
                                config.evaluation.bertscore_revision)
     result["truncated_count"] = sum(row["truncated"] for row in rows)
+    result["by_clip_type"] = {}
+    for clip_type in ("sentence", "def", "unknown"):
+        subset = [row for row in rows if row.get("clip_type", "unknown") == clip_type]
+        identity = {"uid_count": len(subset), "uid_hash": fingerprint(sorted(row["uid"] for row in subset)),
+                    "source_count": len({row["source_id"] for row in subset})}
+        scores = score_predictions([row["prediction"] for row in subset], [row["references"] for row in subset],
+            metrics or config.evaluation.metrics, config.evaluation.bertscore_model,
+            config.evaluation.bertscore_revision) if subset else {"scores": {}, "unavailable": {}, "status": "empty-subset"}
+        result["by_clip_type"][clip_type] = {**scores, **identity}
     gold = [row for row in rows if row.get("interpreter_reference") is not None]
     if gold:
         uids = sorted(row["uid"] for row in gold)

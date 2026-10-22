@@ -55,3 +55,17 @@ def test_gold_subset_is_paired(monkeypatch):
     left, right = scores["transcript_on_gold_subset"], scores["interpreter_diagnostic"]
     assert left["count"] == right["count"] == 3
     assert left["uid_hash"] == right["uid_hash"]
+
+
+def test_clip_type_reports_preserve_primary_and_empty_subsets():
+    config = Config()
+    config.evaluation.metrics = ["wer"]
+    rows = [{"uid": str(i), "source_id": "source", "clip_type": kind, "prediction": prediction,
+             "references": ["correct sentence"], "truncated": False}
+            for i, (kind, prediction) in enumerate((("sentence", "correct sentence"), ("def", "wrong")))]
+    report = generation.score_rows(rows, config)
+    assert report["by_clip_type"]["sentence"]["scores"]["wer"] == 0
+    assert report["by_clip_type"]["def"]["scores"]["wer"] > 0
+    assert report["by_clip_type"]["unknown"]["status"] == "empty-subset"
+    assert report["by_clip_type"]["unknown"]["uid_count"] == 0
+    assert report["by_clip_type"]["sentence"]["uid_hash"] != report["by_clip_type"]["def"]["uid_hash"]

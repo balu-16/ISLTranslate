@@ -41,3 +41,11 @@ def test_real_gold_headers(tmp_path, record_factory):
 def test_alias_ambiguity_still_fails():
     with pytest.raises(ValueError, match="exactly one"):
         mapped_columns(["short", "long"], {"text": ["short", "long"]})
+
+
+def test_adapter_records_clip_type_without_claiming_source_verification(tmp_path):
+    path = tmp_path / "types.csv"
+    path.write_text("uid,text\nparent-1,sentence\n0EaLX2t1wPU_e1,definition\ncustom,unknown\n")
+    records = adapt_csv(Adapter(annotations=str(path), dataset_revision="fixture", source_mapping=None))
+    assert [r.clip_type for r in records] == ["sentence", "def", "unknown"]
+    assert not any(r.source_verified for r in records)

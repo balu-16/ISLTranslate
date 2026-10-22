@@ -26,6 +26,8 @@ Filenames without a repeated directory prefix in a table row share that row's di
 
 ## Annotation adapters
 
+Canonical records carry `clip_type: sentence | def | unknown`, derived only from the recognized sentence/DEF conventions unless explicitly provided in adapter metadata. It does not verify source identity. New audits/splits include this field in membership hashes: create revised artifact paths rather than editing old manifests. Aggregate scores remain primary; evaluation and diagnostics add `by_clip_type` counts, UID hashes and metrics, with empty subsets marked unavailable rather than assigned zero scores.
+
 `data.target` configures the primary annotations and pose directory. `data.pretrain` is absent in the baseline and explicitly configured for transfer. Each adapter declares a dataset name, exact dataset revision, annotation revision, paths and column aliases. `dataset_revision: REQUIRED` intentionally prevents manifest creation.
 
 Default target CSV headers are `uid,text`. Aliases are explicit lists under `columns`; exactly one candidate for each field must appear. Missing/duplicated headers, ambiguous aliases and malformed rows fail. A UID must be a nonempty filename-safe identifier with no path separators or NUL characters.

@@ -430,6 +430,7 @@ def diagnostics(config: Config, checkpoint: str, partition: str, output: str, de
             for index, prediction, flag in zip(indices, predictions, flags):
                 record = dataset.records[index]
                 rows.append({**prediction, "source_id": record.source_id, "references": [record.text],
+                             "clip_type": record.clip_type,
                              "interpreter_reference": record.interpreter_text, "diagnostic": flag})
         write_jsonl(Path(output) / f"{kind}.jsonl", rows)
         reports[kind] = score_rows(rows, config)
