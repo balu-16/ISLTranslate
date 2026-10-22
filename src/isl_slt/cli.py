@@ -93,7 +93,11 @@ def dispatch(args) -> dict | list:
                                evidence=args.evidence, approve_def=args.approve_def)
     if command == "env-check":
         from isl_slt.utils.runtime import environment_report
-        return environment_report(config.runtime)
+        report = environment_report(config.runtime)
+        if not report["configured_precision_ok"]:
+            print(json.dumps(report, indent=2))
+            raise RuntimeError("Configured precision failed recurrent/T5 environment probes; inspect report before training")
+        return report
     if command == "audit":
         from isl_slt.workflows import audit
         return audit(config, args.allow_missing_poses)

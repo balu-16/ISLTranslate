@@ -103,6 +103,8 @@ uv run --no-sync python -m isl_slt train --config configs/baseline.yaml --dry-ru
 
 `env-check` executes synthetic recurrent forward/backward probes. `plan` and `--dry-run` print configuration/planning information without loading datasets or models. A printed plan does not validate files, cache contents, losses or convergence.
 
+The environment check also constructs a tiny random T5 locally and probes forward/backward plus repeated greedy generation for each precision. No weights are downloaded. Reports separate recurrent and T5 outcomes; the CLI fails when the configured precision fails either. Probe success is preliminary host evidence, not a convergence or reproducibility guarantee for the full model. Tested backend pins and a genuine `uv.lock` (review task 10) remain deferred until dependency resolution is authorized.
+
 ## 4. Audit and freeze membership
 
 First generate candidate source mappings, then review their real naming/cross-dataset evidence and supply a separate authoritative map:
