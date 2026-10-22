@@ -149,7 +149,7 @@ def run_training(config: Config, resume: str | None = None) -> dict:
             raise ValueError("Overfit UIDs must all belong to the immutable training partition")
         partitions["train"], partitions["validation"] = selected, selected
         split_metadata = {**split_metadata, "hashes": {**split_metadata["hashes"], "overfit": manifest_hash(selected)}}
-    seed_everything(config.training.seed, config.runtime.deterministic)
+    seed_everything(config.training.seed, config.runtime.deterministic, config.runtime.determinism_mode == "warn")
     device, root, budget = device_for(config.runtime), Path(config.run_dir), Budget(config.runtime.wall_time_seconds)
     backend = {"device": str(device), "torch": str(torch.__version__), "hip": torch.version.hip,
                "cuda": torch.version.cuda}

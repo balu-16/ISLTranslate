@@ -116,4 +116,5 @@ runtime:
   precision: fp32
   recurrent_fp32: true
   deterministic: true
+  determinism_mode: strict
   wall_time_seconds: null

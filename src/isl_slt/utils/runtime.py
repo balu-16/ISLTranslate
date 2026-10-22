@@ -1,6 +1,7 @@
 """Backend-neutral precision and reproducibility. Operations run only on explicit calls."""
 
 import random
+import os
 import time
 from contextlib import nullcontext
 
@@ -10,13 +11,16 @@ import torch
 from isl_slt.config import Runtime
 
 
-def seed_everything(seed: int, deterministic: bool = True) -> None:
+def seed_everything(seed: int, deterministic: bool = True, warn_only: bool = False) -> None:
+    # Configure NVIDIA cuBLAS before any CUDA seeding/initialization. HIP is probed separately.
+    if deterministic and torch.version.hip is None:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    torch.use_deterministic_algorithms(deterministic)
+    torch.use_deterministic_algorithms(deterministic, warn_only=warn_only)
     torch.backends.cudnn.benchmark = False
 
 
@@ -69,10 +73,14 @@ class Budget:
 
 
 def environment_report(runtime: Runtime) -> dict:
+    seed_everything(0, runtime.deterministic, runtime.determinism_mode == "warn")
     device = device_for(runtime)
     report = {"torch": torch.__version__, "hip": torch.version.hip, "cuda": torch.version.cuda,
               "device": str(device), "precision": runtime.precision,
-              "recurrent_fp32_policy": runtime.recurrent_fp32, "probes": {}}
+              "recurrent_fp32_policy": runtime.recurrent_fp32, "probes": {},
+              "deterministic": runtime.deterministic, "determinism_mode": runtime.determinism_mode,
+              "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+              "hipblas_workspace_config": os.environ.get("HIPBLAS_WORKSPACE_CONFIG")}
     if device.type == "cuda":
         report.update(name=torch.cuda.get_device_name(device), memory_bytes=torch.cuda.get_device_properties(
             device).total_memory, bf16=torch.cuda.is_bf16_supported())

@@ -167,6 +167,7 @@ class Runtime(Strict):
     precision: Literal["fp32", "bf16", "fp16"] = "fp32"
     recurrent_fp32: bool = True
     deterministic: bool = True
+    determinism_mode: Literal["strict", "warn"] = "strict"
     wall_time_seconds: float | None = Field(default=None, gt=0)
 
 
