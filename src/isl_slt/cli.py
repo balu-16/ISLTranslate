@@ -12,15 +12,21 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="isl_slt", description="Auditable continuous ISL translation")
     commands = result.add_subparsers(dest="command", required=True)
     for name in ("plan", "env-check", "audit", "split", "check-leakage", "prepare-features", "prepare-model",
-                 "prepare-rgb", "train", "overfit", "evaluate", "predict", "diagnostics", "benchmark"):
+                 "prepare-rgb", "prepare-stats", "verify-cache", "train", "overfit", "evaluate", "predict", "diagnostics", "benchmark", "make-source-map"):
         sub = commands.add_parser(name)
         sub.add_argument("--config", required=True)
         sub.add_argument("--dry-run", action="store_true", help="Print resolved plan without loading data/models")
+        if name in ("verify-cache", "train", "overfit", "evaluate", "diagnostics"):
+            sub.add_argument("--verify-assets", action=argparse.BooleanOptionalAction, default=None)
+        if name == "make-source-map":
+            sub.add_argument("--out")
+            sub.add_argument("--dataset", choices=["target", "pretrain"], default="target")
         if name == "prepare-model":
             sub.add_argument("--allow-network", action="store_true")
         if name in ("train", "overfit"):
             sub.add_argument("--resume")
             sub.add_argument("--seed", type=int)
+            sub.add_argument("--allow-code-change", action="store_true")
         if name == "overfit":
             sub.add_argument("--uids", required=True)
         if name in ("evaluate", "predict", "diagnostics", "benchmark"):
@@ -28,7 +34,7 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--output", required=True)
         if name in ("evaluate", "diagnostics"):
             sub.add_argument("--partition", choices=["validation", "test", "gold"], default="test")
-        if name == "evaluate":
+        if name in ("evaluate", "predict", "benchmark", "diagnostics"):
             sub.add_argument("--decoding")
         if name in ("predict", "benchmark"):
             sub.add_argument("--inputs", required=True, help="JSONL VisualInput records; reference fields are rejected")
@@ -58,6 +64,8 @@ def dispatch(args) -> dict | list:
     if hasattr(args, "config"):
         config = load_config(args.config)
         raw = config.model_dump(mode="json")
+        if getattr(args, "verify_assets", None) is not None:
+            raw["data"]["verify_assets"] = args.verify_assets
         if getattr(args, "seed", None) is not None:
             raw["training"]["seed"] = args.seed
             raw["run_dir"] = str(Path(raw["run_dir"]) / f"seed-{args.seed}")
@@ -67,6 +75,15 @@ def dispatch(args) -> dict | list:
         if command == "plan" or args.dry_run:
             from isl_slt.workflows import planned_experiment
             return {"command": command, **planned_experiment(config)}
+    if command == "verify-cache":
+        from isl_slt.workflows import verify_cache
+        return verify_cache(config, args.verify_assets is not False)
+    if command == "prepare-stats":
+        from isl_slt.features.statistics import prepare_stats
+        return prepare_stats(config)
+    if command == "make-source-map":
+        from isl_slt.workflows import make_source_map
+        return make_source_map(config, args.out, args.dataset)
     if command == "env-check":
         from isl_slt.utils.runtime import environment_report
         return environment_report(config.runtime)
@@ -82,7 +99,7 @@ def dispatch(args) -> dict | list:
         return prepare_model(config, args.allow_network)
     if command in ("train", "overfit"):
         from isl_slt.training.engine import run_training
-        return run_training(config, args.resume)
+        return run_training(config, args.resume, args.allow_code_change)
     if command == "evaluate":
         from isl_slt.workflows import evaluate
         report = evaluate(config, args.checkpoint, args.partition, args.output, args.decoding)
@@ -92,10 +109,10 @@ def dispatch(args) -> dict | list:
         return report
     if command == "diagnostics":
         from isl_slt.workflows import diagnostics
-        return diagnostics(config, args.checkpoint, args.partition, args.output)
+        return diagnostics(config, args.checkpoint, args.partition, args.output, args.decoding)
     if command in ("predict", "benchmark"):
         from isl_slt.inference import Predictor, VisualInput
-        predictor = Predictor.from_checkpoint(args.checkpoint, config.runtime)
+        predictor = Predictor.from_checkpoint(args.checkpoint, config.runtime, args.decoding, config.generation)
         inputs = [VisualInput.model_validate(row) for row in read_jsonl(args.inputs)]
         if command == "predict":
             predictions = predictor.predict(inputs)

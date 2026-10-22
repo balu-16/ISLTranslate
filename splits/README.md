@@ -9,7 +9,7 @@ The default directory is `splits/source-v1/`. Transfer uses `splits/source-v1-tr
 - `leakage.json`: source, UID, known-content and source-verification checks.
 - For transfer, `pretrain.jsonl` and `pretraining-filter.json`: eligible extra examples and the contamination report.
 
-The standard protocol reserves complete parent sources associated with interpreter examples as gold, then approximates 80/10/10 among the remaining parents. Whole groups stay together. An original-paper protocol requires exact external membership; equal counts do not establish paper membership.
+The standard protocol reserves complete parent sources associated with interpreter examples as gold, then approximates 80/10/10 among the remaining parents. Whole groups stay together. The external-membership-gold-safe protocol requires exact external membership and exports algorithm=external-membership; equal counts do not establish paper reproduction.
 
 Train seeds reuse the same split files. Inspect source provenance and reports before training; unresolved identities or leakage cannot be solved by silently reshuffling clips.
 

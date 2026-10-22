@@ -16,6 +16,7 @@ runs/<experiment>/
   checkpoints/
     last.pt                       complete continuation state
     best-bleu.pt                  validation BLEU-4 selection
+    best-guarded.pt               BLEU improvement within historical chrF tolerance
     best-chrf.pt                  validation chrF++ selection
     epoch-*.pt                    retained trajectory checkpoints
     pretrain/                     optional pretraining best checkpoints
@@ -32,3 +33,5 @@ Keep checkpoints, exact data memberships/revisions, prepared-asset identities, r
 Missing metric resources remain unavailable in reports. A directory or report file alone does not establish successful validation. Do not add placeholder scores or assumed performance values.
 
 See [training/evaluation commands](../docs/runbook.md), [experiment protocols](../docs/experiments.md) and [implementation status](../docs/implementation_status.md).
+
+Only last.pt is resumable; best/epoch checkpoints are self-describing inference snapshots without optimizer/scheduler/scaler/RNG state. Final evaluation needs the explicit validation beam selection when it differs from the cheaper per-epoch policy. All prediction commands accept --decoding, including averaged weights. Reports include paired gold subsets, cased/lowercase signatures, effective evaluation fingerprints and checkpoint bytes. Logs/summarize_run.py expose actual training measurements; no placeholder throughput is written.

@@ -38,10 +38,12 @@ def score_predictions(predictions: list[str], references: list[list[str]], metri
         try:
             if metric in ("bleu", "chrf", "ter"):
                 from sacrebleu.metrics import BLEU, CHRF, TER
-                engines = ({f"bleu{order}": BLEU(tokenize="13a", lowercase=False, max_ngram_order=order,
-                                                 smooth_method="exp", effective_order=False) for order in range(1, 5)}
-                           if metric == "bleu" else {"chrf++": CHRF(word_order=2)} if metric == "chrf" else {
-                               "ter": TER(case_sensitive=True)})
+                engines = ({f"bleu{order}{'_lc' if lower else ''}": BLEU(
+                    tokenize="13a", lowercase=lower, max_ngram_order=order,
+                    smooth_method="exp", effective_order=False)
+                    for lower in (False, True) for order in range(1, 5)}
+                    if metric == "bleu" else {f"chrf++{'_lc' if lower else ''}": CHRF(word_order=2, lowercase=lower)
+                    for lower in (False, True)} if metric == "chrf" else {"ter": TER(case_sensitive=True)})
                 for name, engine in engines.items():
                     result["scores"][name] = engine.corpus_score(predictions, columns).score
                     result["signatures"][name] = str(engine.get_signature())

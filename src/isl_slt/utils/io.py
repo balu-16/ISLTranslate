@@ -30,6 +30,25 @@ def file_hash(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+class HashSession:
+    """Command-scoped hashing: verify each unchanged file once, reject in-command mutations."""
+    def __init__(self):
+        self.entries = {}
+
+    def hash(self, path):
+        path = Path(path).resolve()
+        status = path.stat()
+        identity = (status.st_size, status.st_mtime_ns, status.st_ino)
+        if path in self.entries:
+            previous, digest = self.entries[path]
+            if identity != previous:
+                raise ValueError(f"Asset changed during verification: {path}")
+            return digest
+        digest = file_hash(path)
+        self.entries[path] = (identity, digest)
+        return digest
+
+
 @contextmanager
 def atomic_open(path: str | Path, mode: str = "wb") -> Iterator:
     path = Path(path)
@@ -96,3 +115,26 @@ def append_event(path: str | Path, **event: Any) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("ab") as stream:
         stream.write(canonical(event) + b"\n")
+
+
+def execution_identity(root: str | Path | None = None) -> dict:
+    """Bind continuation to actual source bytes and resolved environment, without credentials."""
+    package = Path(__file__).resolve().parents[1]
+    root = Path(root).resolve() if root else Path.cwd().resolve()
+    source = root / "src" / "isl_slt"
+    source = source if source.is_dir() else package
+    code = {"source_sha256": fingerprint({str(path.relative_to(source)): file_hash(path)
+                for path in sorted(source.rglob("*.py"))}), "git_commit": None, "git_dirty": None}
+    try:
+        code["git_commit"] = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True).strip()
+        code["git_dirty"] = bool(subprocess.check_output(
+            ["git", "-C", str(root), "status", "--porcelain"], stderr=subprocess.DEVNULL, text=True).strip())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    packages = sorted((distribution.metadata.get("Name", "").lower().replace("_", "-"), distribution.version)
+                      for distribution in importlib.metadata.distributions())
+    environment = {"python": platform.python_version(), "platform": platform.platform(), "packages": packages,
+                   "lock_sha256": file_hash(root / "uv.lock") if (root / "uv.lock").is_file() else None,
+                   "pyproject_sha256": file_hash(root / "pyproject.toml") if (root / "pyproject.toml").is_file() else None}
+    return {"code": code, "environment": environment}

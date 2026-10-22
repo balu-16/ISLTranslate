@@ -4,6 +4,9 @@ from pathlib import Path
 
 from isl_slt.config import Config
 from isl_slt.utils.io import file_hash, fingerprint, read_json, write_json, write_jsonl
+from isl_slt.data.context import SourceIndex
+from isl_slt.features.cache import SignatureSession
+from isl_slt.evaluation.selection import load_decoding_selection
 
 
 def planned_experiment(config: Config) -> dict:
@@ -16,6 +19,50 @@ def planned_experiment(config: Config) -> dict:
             "numerical_validation": "not performed by planning"}
 
 
+def make_source_map(config: Config, output: str | None = None, dataset: str = "target") -> dict:
+    import csv
+    from collections import Counter
+    from isl_slt.data.manifests import mapped_columns, read_csv, source_candidate
+    from isl_slt.utils.io import atomic_open
+    adapter = config.data.target if dataset == "target" else config.data.pretrain
+    if adapter is None:
+        raise ValueError("No pretrain adapter is configured")
+    headers, raw = read_csv(adapter.annotations)
+    columns = mapped_columns(headers, {"uid": adapter.columns["uid"]})
+    destination = Path(output) if output else Path(adapter.source_mapping or f"data/metadata/{dataset}_source_mapping.csv").with_suffix(".candidates.csv")
+    if destination.resolve() == Path(adapter.annotations).resolve() or (
+        adapter.source_mapping and destination.resolve() == Path(adapter.source_mapping).resolve()
+    ):
+        raise ValueError("Write candidates separately from raw annotations and authoritative source mappings")
+    rows, evidence, seen, unresolved = [], [], {}, []
+    for row in raw:
+        uid = row[columns["uid"]]
+        if uid in seen:
+            if seen[uid] != row:
+                raise ValueError(f"Conflicting duplicate UID {uid!r}")
+            continue
+        seen[uid] = row
+        match, rule, pattern = source_candidate(uid, adapter.candidate_uid_pattern or adapter.candidate_uid_patterns)
+        rows.append({"uid": uid, "source_id": match["source"] if match else "",
+                     "verified": "false", "provenance": f"candidate:{rule}"})
+        evidence.append({"uid": uid, "rule": rule, "pattern": pattern})
+        if match is None:
+            unresolved.append(uid)
+    with atomic_open(destination, "w") as stream:
+        writer = csv.DictWriter(stream, fieldnames=["uid", "source_id", "verified", "provenance"])
+        writer.writeheader()
+        writer.writerows(rows)
+    report = {"dataset": adapter.dataset_name, "revision": adapter.dataset_revision,
+              "annotations_sha256": file_hash(adapter.annotations), "output": str(destination),
+              "count": len(rows), "rules": dict(Counter(row["rule"] for row in evidence)),
+              "candidates": evidence, "unresolved": unresolved,
+              "verification": "All rows remain unverified; review cross-dataset identity and record supporting evidence"}
+    write_json(destination.with_suffix(".audit.json"), report)
+    if unresolved:
+        raise ValueError(f"Unresolved UIDs (candidate report saved): {unresolved}")
+    return report
+
+
 def audit(config: Config) -> dict:
     from isl_slt.data.dataset import raw_sequence
     from isl_slt.data.manifests import adapt_csv, attach_interpreter, audit_records, save_manifest
@@ -26,7 +73,8 @@ def audit(config: Config) -> dict:
                                        ("pretrain", config.data.pretrain, config.data.pretrain_manifest)):
         if adapter is None:
             continue
-        records = adapt_csv(adapter)
+        adapter_audit = {}
+        records = adapt_csv(adapter, adapter_audit)
         if kind == "target" and config.data.interpreter_csv:
             records = attach_interpreter(records, config.data.interpreter_csv, config.data.interpreter_columns)
         locked = []
@@ -40,7 +88,8 @@ def audit(config: Config) -> dict:
                 f"{name}-file-sha256:{value}" for name, value in hashes.items() if name in ("pose", "video")})
             locked.append(record.model_copy(update={"asset_hashes": hashes, "duplicate_fingerprints": duplicates}))
         records = locked
-        report = audit_records(records)
+        report = {**audit_records(records), **adapter_audit,
+                  "annotations_sha256": file_hash(adapter.annotations), "dataset_revision": adapter.dataset_revision}
         pose_audits = []
         for record in records:
             if not Path(record.pose_path).is_file():
@@ -94,18 +143,39 @@ def prepare_features(config: Config) -> dict:
     from isl_slt.features.pose import prepare_pose
     partitions, _ = checked_splits(config.data)
     results = {}
+    signatures = SignatureSession()
     for name, records in partitions.items():
+        indexed = SourceIndex(records)
         counts = []
         for record in records:
-            sequence = raw_sequence(record, records, config)
+            sequence = raw_sequence(record, indexed, config)
             prepared = prepare_pose(sequence, config.features, config.context.enabled)
-            metadata = write_features(config, record, prepared, dependencies_for(record, records, config))
+            metadata = write_features(config, record, prepared, dependencies_for(record, indexed, config), signatures)
             counts.append({"uid": record.uid, "frames": metadata["frames"], "input_dim": metadata["input_dim"]})
         results[name] = counts
     report = {"preprocessing_fingerprint": preprocessing_fingerprint(config), "partitions": results}
     write_json(Path(config.data.feature_dir) / preprocessing_fingerprint(config) / "index.json", report)
     return {"preprocessing_fingerprint": report["preprocessing_fingerprint"],
             "counts": {name: len(rows) for name, rows in results.items()}}
+
+
+def verify_cache(config: Config, verify_assets: bool = True) -> dict:
+    from isl_slt.data.dataset import dependencies_for
+    from isl_slt.data.splits import checked_splits
+    from isl_slt.features.cache import read_features
+    partitions, _ = checked_splits(config.data)
+    counts = {}
+    signatures = SignatureSession()
+    for name, records in partitions.items():
+        indexed = SourceIndex(records)
+        for record in records:
+            dependencies = dependencies_for(record, indexed, config)
+            prepared = read_features(config, record, dependencies, verify_assets=verify_assets, signatures=signatures)
+            if config.rgb.mode == "cached":
+                from isl_slt.features.rgb import read_rgb
+                read_rgb(config, record, dependencies, prepared.times, verify_assets=verify_assets, signatures=signatures)
+        counts[name] = len(records)
+    return {"verified_cache_counts": counts, "raw_assets_verified": verify_assets}
 
 
 def prepare_model(config: Config, allow_network: bool) -> dict:
@@ -166,14 +236,17 @@ def prepare_rgb(config: Config) -> dict:
     device = device_for(config.runtime)
     encoder = RGBEncoder(config.rgb.weights_path).to(device).eval()
     counts = {}
+    signatures = SignatureSession()
     for name, records in partitions.items():
+        indexed = SourceIndex(records)
         for record in records:
-            rgb_signature(config, record, dependencies_for(record, records, config))
-            sequence = raw_sequence(record, records, config)
-            images, masks = load_crops(record, records, sequence, config)
+            dependencies = dependencies_for(record, indexed, config)
+            rgb_signature(config, record, dependencies, signatures=signatures)
+            sequence = raw_sequence(record, indexed, config)
+            images, masks = load_crops(record, indexed, sequence, config)
             with torch.no_grad(), autocast(config.runtime, device):
                 vectors = encoder(images.to(device)).float().cpu().numpy()
-            write_rgb(config, record, dependencies_for(record, records, config), vectors, masks.numpy(), sequence.times)
+            write_rgb(config, record, dependencies, vectors, masks.numpy(), sequence.times, signatures)
         counts[name] = len(records)
     return {"cached_examples": counts, "cnn_trainable": False, "revision": config.rgb.revision}
 
@@ -193,17 +266,22 @@ def evaluation_inputs(config: Config, checkpoint: str, partition: str):
     if saved_hash is None or saved_hash != metadata["hashes"][partition]:
         raise ValueError("Evaluation partition differs from the checkpoint's immutable manifest")
     dataset = PoseDataset(partitions[partition], config, training=False)
+    statistics_signature = dataset.statistics["signature"] if dataset.statistics else None
+    if statistics_signature != predictor.checkpoint["compatibility"].get("statistics"):
+        raise ValueError("Evaluation feature statistics differ from the checkpoint")
+    if config.rgb.mode == "cached" and dataset.rgb_initializer != predictor.checkpoint["rgb_initializer"]["sha256"]:
+        raise ValueError("Evaluation RGB initializer differs from the checkpoint")
     return predictor, dataset, metadata
 
 
-def comparison_fingerprint(predictor) -> str:
+def comparison_fingerprint(predictor, effective_evaluation: dict) -> str:
     config = predictor.config
     training = config.training.model_dump(mode="json")
     training.pop("seed")
     return fingerprint({"model": config.model.model_dump(mode="json"), "training": training,
                         "features": predictor.checkpoint["compatibility"]["feature_schema"],
                         "rgb": config.rgb.model_dump(mode="json"), "lexical": config.lexical.model_dump(mode="json"),
-                        "generation": config.generation.model_dump(mode="json"),
+                        "evaluation": effective_evaluation,
                         "rgb_initializer": predictor.checkpoint.get("rgb_initializer"),
                         "initializer": predictor.checkpoint["initializer"]})
 
@@ -223,23 +301,33 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
         write_json(Path(output) / "decoding.json", selection)
     else:
         if decoding:
-            selection = read_json(decoding)
-            if (selection["checkpoint_sha256"] != checkpoint_sha or selection["partition"] != "validation" or
-                selection["validation_membership_hash"] != metadata["hashes"]["validation"] or
-                selection["generation_hash"] != generation_hash):
-                raise ValueError("Decoding selection must match this checkpoint, validation split and generation settings")
+            selection = load_decoding_selection(decoding, checkpoint_sha, metadata["hashes"]["validation"], generation_hash)
             beams = selection["selected_beams"]
         else:
+            if predictor.checkpoint["state"].get("decoding_policy") == "training-validation" and (
+                set(predictor.config.generation.train_beams) != set(config.generation.beams)
+            ):
+                raise ValueError("Run the final validation beam sweep and supply --decoding before test/gold")
             if (config.generation.model_dump() != predictor.config.generation.model_dump() or predictor.beams is None
                 or predictor.checkpoint["state"]["decoding_partition"] != "validation"):
                 raise ValueError("Run validation decoding selection first and supply --decoding")
             beams = predictor.beams
         rows = generate_loader(predictor.model, predictor.tokenizer, loader, config, predictor.device, beams)
     write_jsonl(Path(output) / "predictions.jsonl", rows)
+    metric_report = score_rows(rows, config)
+    effective = {"generation": config.generation.model_dump(mode="json"), "selected_beams": beams,
+                 "metrics": config.evaluation.metrics, "normalization": metric_report["normalization"],
+                 "signatures": metric_report["signatures"],
+                 "bertscore_model": config.evaluation.bertscore_model,
+                 "bertscore_revision": config.evaluation.bertscore_revision,
+                 "precision": config.runtime.precision, "recurrent_fp32": config.runtime.recurrent_fp32,
+                 "deterministic": config.runtime.deterministic, "determinism_mode": config.runtime.determinism_mode}
     report = {"partition": partition, "membership_hash": metadata["hashes"][partition],
               "protocol": metadata["protocol"], "seed": predictor.config.training.seed,
-              "comparison_fingerprint": comparison_fingerprint(predictor), "selected_beams": beams,
-              "checkpoint_sha256": checkpoint_sha, "metrics": score_rows(rows, config),
+              "comparison_fingerprint": comparison_fingerprint(predictor, effective), "selected_beams": beams,
+              "effective_evaluation": effective, "evaluation_fingerprint": fingerprint(effective),
+              "checkpoint_sha256": checkpoint_sha, "checkpoint_bytes": Path(checkpoint).stat().st_size,
+              "checkpoint_kind": predictor.checkpoint.get("checkpoint_kind", "legacy"), "metrics": metric_report,
               "runtime": config.runtime.model_dump(mode="json"),
               "context_lookahead_seconds": config.context.next_seconds if config.context.enabled else 0,
               "parameter_counts": predictor.checkpoint["parameter_counts"]}
@@ -247,11 +335,12 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
     return report
 
 
-def diagnostics(config: Config, checkpoint: str, partition: str, output: str) -> dict:
+def diagnostics(config: Config, checkpoint: str, partition: str, output: str, decoding: str | None = None) -> dict:
     from isl_slt.data.dataset import LengthBuckets
     from isl_slt.evaluation.diagnostics import perturb_items
     from isl_slt.evaluation.generation import score_rows
     predictor, dataset, metadata = evaluation_inputs(config, checkpoint, partition)
+    predictor.configure_decoding(config.generation, decoding)
     if predictor.beams is None:
         raise ValueError("Diagnostics require validation-selected decoding from a trajectory checkpoint")
     import random

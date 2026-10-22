@@ -66,3 +66,9 @@ When changing precision, create an explicit experiment override with a fresh run
 - Treat a failed backend/kernel probe as a setup issue to resolve before training. No NVIDIA-only extension is required by the implementation.
 
 Reference documentation: [uv PyTorch integration](https://docs.astral.sh/uv/guides/integration/pytorch/) and [PyTorch HIP semantics](https://docs.pytorch.org/docs/stable/notes/hip.html). Compatibility of the configured environment remains pending.
+
+## Strict reproducibility and future acceptance
+
+`runtime.determinism_mode: strict` is the default. Explicit `warn` mode permits nondeterministic operations and is for debugging; its use is recorded. NVIDIA workspace configuration is applied before CUDA use. ROCm workspace behavior and recurrent numerical behavior need separate host probes; NVIDIA failure claims are not treated as established AMD failures.
+
+For future CPU acceptance, resolve/sync `--extra cpu --extra dev`, then use `uv run --no-sync pytest`. Tests have not been executed and their runtime is not guaranteed. A real lock is still required; do not fabricate one during implementation. Retain the measured environment inventory used for managed hosts.

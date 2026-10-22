@@ -9,6 +9,22 @@ from isl_slt.data.manifests import Record
 from isl_slt.data.pose import PoseSequence
 
 
+class SourceIndex:
+    """Stable per-source/partition timeline shared by all clips in a command or dataset."""
+    def __init__(self, records):
+        self.records, self.groups = list(records), {}
+        for record in self.records:
+            self.groups.setdefault((record.source_id, record.split), []).append(record)
+        for rows in self.groups.values():
+            rows.sort(key=lambda row: (row.start_seconds if row.start_seconds is not None else -1, row.uid))
+
+    def dependencies(self, record):
+        return self.groups.get((record.source_id, record.split), [])
+
+    def __iter__(self):
+        return iter(self.records)
+
+
 def assemble_context(center: Record, records: list[Record], settings: Context,
                      reader: Callable[[Record], PoseSequence]) -> PoseSequence:
     if not settings.enabled:

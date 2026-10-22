@@ -63,7 +63,7 @@ def make_splits(records: list[Record], settings: Data) -> dict[str, list[Record]
     gold_sources = {r.source_id for r in records if r.interpreter_text is not None}
     result = {name: [] for name in ("train", "validation", "test", "gold")}
     assignment = {source: "gold" for source in gold_sources}
-    if settings.protocol == "original-paper":
+    if settings.protocol == "external-membership-gold-safe":
         _, external = read_csv(settings.original_splits_csv)
         membership = {row["uid"]: row["split"] for row in external}
         if len(membership) != len(external) or set(membership) != {r.uid for r in records}:
@@ -140,7 +140,8 @@ def filter_pretraining(pool: list[Record], target: dict[str, list[Record]]) -> t
 def export_splits(partitions: dict[str, list[Record]], settings: Data, pretrain_report: dict | None = None) -> dict:
     root = Path(settings.split_dir)
     report = assert_leakage_free(partitions, settings.protocol != "exploratory-unverified")
-    metadata = {"algorithm": "largest-deficit-whole-source-v1", "seed": settings.split_seed,
+    metadata = {"algorithm": "external-membership" if settings.protocol == "external-membership-gold-safe"
+                else "largest-deficit-whole-source-v1", "seed": settings.split_seed,
                 "protocol": settings.protocol, "ratios": list(settings.ratios),
                 "hashes": report["membership_hashes"],
                 "counts": {name: len(rows) for name, rows in partitions.items()},

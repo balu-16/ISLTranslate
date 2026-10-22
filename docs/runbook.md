@@ -16,11 +16,12 @@ Install uv separately, then resolve dependencies and select exactly one backend.
 
 ```bash
 uv lock
-uv sync --locked --extra cpu
-cp .env.example .env
+uv sync --locked --extra cpu --extra dev
+uv run --no-sync pytest
+# Create .env from .env.example only if it does not already exist.
 ```
 
-Populate local credentials/resource paths as needed. No lockfile was fabricated during implementation. Subsequent commands use `--no-sync` so they do not implicitly install or change dependencies. One optional runner notebook is available; local tests remain removed and there is currently no test-suite command.
+Populate local credentials/resource paths as needed. No lockfile was fabricated during implementation. Subsequent commands use `--no-sync` so they do not implicitly install or change dependencies. One optional runner notebook and an offline CPU pytest suite are available. Tests have not been run and their duration remains unmeasured.
 
 ## Notebook workflow
 
@@ -40,9 +41,9 @@ Select the project's `.venv` interpreter. In VS Code, use **Select Kernel → Py
 uv run --no-sync python -m ipykernel install --user --name isl-slt --display-name "ISL SLT (uv)"
 ```
 
-The notebook checks its kernel environment and resolves the repository from either the root or `notebooks/` working directory. Change `CONFIG_PATH` in its configuration cell; derived run/checkpoint/output paths follow the selected config. An optional seed override mirrors the CLI's `seed-<seed>` directory convention.
+The notebook resolves the repository from the root or `notebooks/` working directory. The default uv mode requires the project kernel; `RUNNER="managed"` validates the host Python/packages/backend instead. See [managed setup](colab.md). Change `CONFIG_PATH` in its configuration cell; derived run/checkpoint/output paths follow the selected config. An optional seed override mirrors the CLI's `seed-<seed>` directory convention.
 
-Every CLI cell starts with `execute=False` and only prints its argument list as a readable command. Set it to `True` for the stage you intend to execute. Model downloads also require `allow_network=True`; notebook cells never install dependencies. The runner loads `.env` through uv when the file exists and does not display its contents. Subprocess output is streamed into the cell, nonzero exits raise errors, and kernel interruption stops the running subprocess group on POSIX.
+Every CLI cell starts with `execute=False` and only prints its argument list as a readable command. Set it to `True` for the stage you intend to execute. Model downloads also require `allow_network=True`; notebook cells never install dependencies. The uv runner loads `.env` without displaying it; managed mode inherits the kernel environment. Subprocess output is streamed into the cell, nonzero exits raise errors, and kernel interruption stops the running subprocess group on POSIX.
 
 Audit, inspect the report, freeze splits and check leakage before preparing features and training. Execute either fresh training or resume as appropriate. For a resumable time limit, configure `runtime.wall_time_seconds`; an interrupted cell may leave only a previously saved checkpoint.
 
@@ -62,6 +63,15 @@ uv run --no-sync python -m isl_slt train --config configs/baseline.yaml --dry-ru
 
 ## 4. Audit and freeze membership
 
+First generate candidate source mappings, then review their real naming/cross-dataset evidence and supply a separate authoritative map:
+
+```bash
+uv run --no-sync python -m isl_slt make-source-map --config configs/baseline.yaml
+uv run --no-sync python -m isl_slt make-source-map --config configs/transfer.yaml --dataset pretrain
+```
+
+Candidates remain unverified. Unresolved UIDs fail after report export. The command never overwrites an authoritative map. Exact duplicate rows are collapsed with kept/dropped row numbers and hashes; conflicting same-UID rows fail and raw annotations remain unchanged.
+
 ```bash
 uv run --no-sync python -m isl_slt audit --config configs/baseline.yaml
 uv run --no-sync python -m isl_slt split --config configs/baseline.yaml
@@ -76,34 +86,34 @@ Membership is immutable and source-disjoint; different training seeds reuse it. 
 
 ```bash
 uv run --no-sync python -m isl_slt prepare-features --config configs/baseline.yaml
+uv run --no-sync python -m isl_slt verify-cache --config configs/baseline.yaml
 uv run --no-sync --env-file .env python -m isl_slt prepare-model --config configs/baseline.yaml --allow-network
 ```
 
 The feature command writes fingerprinted arrays and metadata. Model preparation is an explicit future download of the configured generic initializer. It resolves the requested T5 revision to a commit and records checksums in `artifacts/models/flan-t5-small/asset.json`. Ordinary training/evaluation loads local assets.
 
-Review feature dimensions, sequence lengths, masks, preparation settings and the resolved initializer before using them in a training run.
+Review feature dimensions, lengths, masks, preparation settings and the initializer before training. Ordinary pose/cached-RGB training validates arrays and manifest dependency signatures without reopening raw assets. Arrays are hashed once at construction and file identities are checked during item reads. `verify-cache` defaults to full raw verification; `--no-verify-assets` checks caches alone. Train/evaluate/diagnostics accept `--verify-assets` explicitly.
+
+Pose cache v2 adds continuous validity; old caches need regeneration. For optional standardization, prepare features with its config first:
+
+```bash
+uv run --no-sync python -m isl_slt prepare-features --config configs/standardized.yaml
+uv run --no-sync python -m isl_slt prepare-stats --config configs/standardized.yaml
+uv run --no-sync python -m isl_slt train --config configs/standardized.yaml
+```
+
+Statistics fit immutable target-training data only, preserve masks/invalid zeros, and are embedded in checkpoints. Image-mode RGB and raw prediction still require real assets.
 
 ## 6. Inspect a small training subset
 
-Choose 32–64 unique manually inspected UIDs from the immutable training partition and write one UID per line to `data/overfit_uids.txt`. Supply a separate configuration, for example `configs/overfit.local.yaml`:
-
-```yaml
-extends: baseline.yaml
-experiment: inspected-training-subset
-run_dir: runs/inspected-training-subset
-training:
-  micro_batch_size: 4
-  gradient_accumulation_steps: 1
-  early_stopping_patience: 20
-```
-
-Then execute later:
+Choose 32–64 unique manually inspected training UIDs and write one per line to `data/overfit_uids.txt`. The dedicated preset disables dropout, weight decay, noise and lexical loss, with T5 unfrozen:
 
 ```bash
-uv run --no-sync python -m isl_slt overfit --config configs/overfit.local.yaml --uids data/overfit_uids.txt
+uv run --no-sync python -m isl_slt plan --config configs/overfit.yaml
+uv run --no-sync python -m isl_slt overfit --config configs/overfit.yaml --uids data/overfit_uids.txt
 ```
 
-The inspected-subset protocol uses the chosen training examples for both fitting and diagnostic selection, records the special selection partition, and excludes additional pretraining. It cannot establish held-out quality. Inspect loss, gradient behavior and generated outputs; do not report its metrics as validation/test results.
+The protocol fits and selects on those training examples, records a diagnostic partition and excludes extra pretraining. Inspect loss/gradients/generated text; there is no BLEU threshold or held-out quality claim.
 
 ## 7. Train and resume the baseline
 
@@ -111,7 +121,7 @@ The inspected-subset protocol uses the chosen training examples for both fitting
 uv run --no-sync python -m isl_slt train --config configs/baseline.yaml
 ```
 
-Default training freezes T5 for one adapter epoch, then trains jointly for up to 19 more epochs. Validation generation chooses greedy or beam-4 decoding, and BLEU-4 controls early stopping in the final stage. Monitor `events.jsonl` and saved validation predictions rather than teacher-forced losses alone.
+Default training freezes T5 for one adapter epoch, then trains jointly for up to 19 more epochs. Per-epoch validation uses generation.train_beams (default greedy); the final validation sweep uses generation.beams (default 1 and 4). BLEU-4 controls early stopping in the final stage. Monitor `events.jsonl` and saved validation predictions rather than teacher-forced losses alone.
 
 Continue a matching saved trajectory with:
 
@@ -119,7 +129,7 @@ Continue a matching saved trajectory with:
 uv run --no-sync python -m isl_slt train --config configs/baseline.yaml --resume runs/baseline/checkpoints/last.pt
 ```
 
-Resume checks data/cache/tokenizer/experiment/numerical fingerprints and the backend. A new run cannot reuse an existing run directory without an explicit resume. If a wall-time limit returns `wall_time_limit`, retain `last.pt` and resume with the same compatible setup.
+Resume checks data/cache/tokenizer/experiment/numerical fingerprints, backend, source/Git identity, actual packages and lock/pyproject hashes. --allow-code-change records only a code transition; it cannot bypass environment or data mismatches. A new run cannot reuse an existing run directory without an explicit resume. If a wall-time limit returns `wall_time_limit`, retain `last.pt` and resume with the same compatible setup.
 
 ## 8. Prepare scoring resources and evaluate
 
@@ -127,14 +137,15 @@ The baseline requests METEOR, which needs local NLTK WordNet. Prepare it explici
 
 ```bash
 uv run --no-sync --env-file .env python -m nltk.downloader -d artifacts/nltk_data wordnet
-uv run --no-sync --env-file .env python -m isl_slt evaluate --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --partition test --output runs/baseline/evaluation/test
-uv run --no-sync --env-file .env python -m isl_slt evaluate --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --partition gold --output runs/baseline/evaluation/gold
-uv run --no-sync python -m isl_slt diagnostics --config configs/diagnostics.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --partition test --output runs/baseline/diagnostics/test
+uv run --no-sync --env-file .env python -m isl_slt evaluate --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --partition validation --output runs/baseline/evaluation/validation
+uv run --no-sync --env-file .env python -m isl_slt evaluate --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --decoding runs/baseline/evaluation/validation/decoding.json --partition test --output runs/baseline/evaluation/test
+uv run --no-sync --env-file .env python -m isl_slt evaluate --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --decoding runs/baseline/evaluation/validation/decoding.json --partition gold --output runs/baseline/evaluation/gold
+uv run --no-sync python -m isl_slt diagnostics --config configs/diagnostics.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --decoding runs/baseline/evaluation/validation/decoding.json --partition test --output runs/baseline/diagnostics/test
 ```
 
-The normal trajectory checkpoint retains validation-selected decoding. Test references are used only for scoring. Metrics and predictions are saved under the output path. Missing requested metric resources are recorded in the report; `evaluate` then exits with an error rather than reporting a substituted zero.
+The training checkpoint retains per-epoch selection; run the final validation beam sweep and pass decoding.json to every final prediction entry point. Test references are used only for scoring. Metrics and predictions are saved under the output path. Missing requested metric resources are recorded in the report; `evaluate` then exits with an error rather than reporting a substituted zero.
 
-Gold transcript/interpreter scores remain separate. Diagnostics save real, blank, incorrect-input and temporal-shuffle predictions; they test input dependence rather than proving semantic faithfulness. For a nonbaseline experiment, use a diagnostic override inheriting that experiment's config so its model/features/RGB settings match the checkpoint.
+Gold reports retain all-parent-holdout transcript scores plus transcript/interpreter scores on exactly the same annotated UID subset, with shared counts/hashes. Diagnostics save real, blank, incorrect-input and temporal-shuffle predictions; they test input dependence rather than proving semantic faithfulness. For a nonbaseline experiment, use a diagnostic override inheriting that experiment's config so its model/features/RGB settings match the checkpoint.
 
 ## 9. Run seeds and summarize
 
@@ -143,12 +154,13 @@ Use seeds 13, 42 and 2026 with the same frozen memberships:
 ```bash
 for training_seed in 13 42 2026; do
   uv run --no-sync python -m isl_slt train --config configs/baseline.yaml --seed "$training_seed"
-  uv run --no-sync --env-file .env python -m isl_slt evaluate --config configs/baseline.yaml --checkpoint "runs/baseline/seed-$training_seed/checkpoints/best-bleu.pt" --partition test --output "runs/baseline/seed-$training_seed/evaluation/test"
+  uv run --no-sync --env-file .env python -m isl_slt evaluate --config configs/baseline.yaml --checkpoint "runs/baseline/seed-$training_seed/checkpoints/best-bleu.pt" --partition validation --output "runs/baseline/seed-$training_seed/evaluation/validation"
+  uv run --no-sync --env-file .env python -m isl_slt evaluate --config configs/baseline.yaml --checkpoint "runs/baseline/seed-$training_seed/checkpoints/best-bleu.pt" --partition test --decoding "runs/baseline/seed-$training_seed/evaluation/validation/decoding.json" --output "runs/baseline/seed-$training_seed/evaluation/test"
 done
 uv run --no-sync python -m isl_slt summarize --reports runs/baseline/seed-13/evaluation/test/metrics.json runs/baseline/seed-42/evaluation/test/metrics.json runs/baseline/seed-2026/evaluation/test/metrics.json --output runs/baseline/seed-summary.json
 ```
 
-The seed override places outputs under `seed-<seed>`. Summaries require compatible reports from distinct seeds. Report individual runs and variation; do not concatenate seed predictions into a single score.
+The seed override places outputs under `seed-<seed>`. Summaries require distinct seeds and identical effective decoding, chosen beams, numerical policy and metric signatures. If validation selects different beams, use a predeclared fixed-beam evaluation protocol for a strict comparable summary. Report individual runs and variation; do not concatenate seed predictions into a single score.
 
 ## 10. Average and reselect decoding
 
@@ -175,8 +187,8 @@ Run this only after both corresponding evaluations exist with aligned UIDs, refe
 `predict` and `benchmark` require reference-free visual JSONL records conforming to `VisualInput`. Required identities/paths and optional timing/geometry metadata must describe actual assets; text/reference fields are rejected.
 
 ```bash
-uv run --no-sync python -m isl_slt predict --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --inputs data/prediction_inputs.jsonl --output runs/baseline/predictions.jsonl
-uv run --no-sync python -m isl_slt benchmark --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --inputs data/prediction_inputs.jsonl --output runs/baseline/benchmark.json
+uv run --no-sync python -m isl_slt predict --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --decoding runs/baseline/evaluation/validation/decoding.json --inputs data/prediction_inputs.jsonl --output runs/baseline/predictions.jsonl
+uv run --no-sync python -m isl_slt benchmark --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/best-bleu.pt --decoding runs/baseline/evaluation/validation/decoding.json --inputs data/prediction_inputs.jsonl --output runs/baseline/benchmark.json
 ```
 
 Benchmark reports distinguish model-only from end-to-end timing and record warmup/iteration settings. The BiLSTM is noncausal. The `estimate` command accepts actual measured throughput, validation time, example/epoch counts and an optional hourly price; no time, credit or quality guarantee is implied.
@@ -184,3 +196,33 @@ Benchmark reports distinguish model-only from end-to-end timing and record warmu
 For missing assets, fix the configured paths or prepare the declared resources. For cache or membership mismatches, identify the changed inputs and use properly revised artifacts. For memory failures, make an explicit new batch/frame/resampling experiment. For resume incompatibility, restore the original environment or start a documented new trajectory. No recovery step silently drops examples or bypasses integrity checks.
 
 See [experiments](experiments.md) for optional run sequences and [implementation status](implementation_status.md) for outstanding verification.
+
+## Asset acquisition and layout
+
+These commands are for later explicit network authorization. Listing does not download the pose parts; CSV and full-part flags are separate:
+
+```bash
+uv run --no-sync --env-file .env python scripts/fetch_isign.py --list --allow-network
+uv run --no-sync --env-file .env python scripts/fetch_isign.py --csv --allow-network
+```
+
+The four pose files are ordered byte parts of one ZIP. Only a deliberately requested `--parts --allow-network` downloads them. Local extraction validates paths/UID uniqueness, builds the member index and decodes one selected sample before bulk extraction. For initial extraction, use the real annotation CSV as a UID request, avoiding immutable manifests with missing/fake asset checksums:
+
+```bash
+uv run --no-sync python scripts/fetch_isign.py --archives data/raw/isign-acquisition/iSign-poses_v1.1_part_aa data/raw/isign-acquisition/iSign-poses_v1.1_part_ab data/raw/isign-acquisition/iSign-poses_v1.1_part_ac data/raw/isign-acquisition/iSign-poses_v1.1_part_ad --uids-csv data/raw/ISLTranslate.csv --config configs/baseline.yaml --out data/raw/poses
+uv run --no-sync python scripts/inspect_pose.py data/raw/poses/ACTUAL_UID.pose --config configs/baseline.yaml
+```
+
+Replace ACTUAL_UID with an extracted UID. `--manifest` can replace `--uids-csv` for a canonical selection. Extraction refuses overwrites, defaults to a 50 GiB selected-byte limit and records the selection/member index/output checksums. Change `--max-bytes` deliberately if justified. Configure `pose_pattern` and canonical-to-stored `features.component_names` from observed headers. The real archive layout and sample decoding remain unverified here.
+
+## Measured training summaries and declared defaults
+
+```bash
+uv run --no-sync python scripts/summarize_run.py runs/baseline --output runs/baseline/training-summary.json
+```
+
+Logs contain actual applied group LRs, synchronized update seconds, examples/frames throughput, allocated GPU peaks and separate epoch train/validation time. Update throughput excludes input-window loading; epoch training time includes it. Setup/checkpoint I/O is excluded. Supply measured values to `estimate`; inference latency is not training throughput.
+
+Only `last.pt` retains continuation state. Best/epoch/averaged checkpoints keep complete inference reconstruction metadata without optimizer/RNG state. `best-guarded.pt` additionally uses the historical chrF tolerance policy.
+
+`evaluation.repeat_seeds` and `evaluation.bootstrap_samples` are declarative notes, not automatic loops or CLI-default overrides. Operative controls are `train --seed`, explicit repetitions and `bootstrap --samples`. Workers remain zero until profiled; persistent workers/GPU pinning are supported. Pose noise changes only position-valid normalized/standardized feature channels; it does not edit raw poses or recompute velocity/bones.

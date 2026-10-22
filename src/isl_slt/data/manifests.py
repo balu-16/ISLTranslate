@@ -118,8 +118,17 @@ def source_mapping(path: str | None) -> dict[str, dict]:
     return result
 
 
-def resolve_source(uid: str, overrides: dict[str, dict], pattern: str) -> dict:
-    match = re.fullmatch(pattern, uid)
+def source_candidate(uid: str, patterns: list[str] | str) -> tuple:
+    for index, pattern in enumerate([patterns] if isinstance(patterns, str) else patterns):
+        match = re.fullmatch(pattern, uid)
+        if match is not None and "source" in match.groupdict():
+            name = "def-tag" if "tag" in match.groupdict() else "sentence-suffix" if "sequence" in match.groupdict() else f"custom-{index}"
+            return match, name, pattern
+    return None, "unresolved", None
+
+
+def resolve_source(uid: str, overrides: dict[str, dict], patterns: list[str] | str) -> dict:
+    match, rule, pattern = source_candidate(uid, patterns)
     sequence = int(match["sequence"]) if match and "sequence" in match.groupdict() else None
     if uid in overrides:
         return {**overrides[uid], "sequence_index": sequence}
@@ -127,7 +136,7 @@ def resolve_source(uid: str, overrides: dict[str, dict], pattern: str) -> dict:
         return {"source_id": None, "sequence_index": sequence, "source_verified": False,
                 "source_provenance": "unresolved"}
     return {"source_id": match["source"], "sequence_index": sequence, "source_verified": False,
-            "source_provenance": f"inferred-regex:{pattern}"}
+            "source_provenance": f"candidate:{rule}:{pattern}"}
 
 
 def _metadata(path: str | None) -> dict[str, dict]:
@@ -164,19 +173,33 @@ def _metadata(path: str | None) -> dict[str, dict]:
     return result
 
 
-def adapt_csv(adapter: Adapter) -> list[Record]:
+def adapt_csv(adapter: Adapter, audit: dict | None = None) -> list[Record]:
     if adapter.dataset_revision == "REQUIRED":
         raise ValueError("Set the exact dataset revision before creating a manifest")
     headers, rows = read_csv(adapter.annotations)
     columns = mapped_columns(headers, adapter.columns)
     if not {"uid", "text"}.issubset(columns):
         raise ValueError("Adapter must explicitly map uid and text")
+    unique, seen, collapsed = [], {}, []
+    for line_number, raw in enumerate(rows, start=2):
+        uid = raw[columns["uid"]]
+        if uid in seen:
+            previous, kept_line = seen[uid]
+            if previous != raw:
+                raise ValueError(f"Conflicting duplicate UID {uid!r} at CSV rows {kept_line}, {line_number}")
+            collapsed.append({"uid": uid, "kept_row": kept_line, "dropped_row": line_number,
+                              "raw_row_sha256": fingerprint(raw)})
+        else:
+            seen[uid] = (raw, line_number)
+            unique.append(raw)
+    if audit is not None:
+        audit["collapsed_exact_duplicates"] = collapsed
     overrides, metadata = source_mapping(adapter.source_mapping), _metadata(adapter.metadata_csv)
     records = []
-    for raw in rows:
+    for raw in unique:
         values = {key: raw[column] for key, column in columns.items()}
         uid = values["uid"]
-        values = {**resolve_source(uid, overrides, adapter.candidate_uid_pattern),
+        values = {**resolve_source(uid, overrides, adapter.candidate_uid_pattern or adapter.candidate_uid_patterns),
                   "pose_path": str(Path(adapter.pose_root) / adapter.pose_pattern.format(uid=uid)),
                   "video_path": str(Path(adapter.video_root) / adapter.video_pattern.format(uid=uid))
                   if adapter.video_root else None,

@@ -3,6 +3,7 @@
 import itertools
 import math
 import uuid
+import time
 from pathlib import Path
 
 import torch
@@ -17,8 +18,9 @@ from isl_slt.evaluation.generation import select_decoding
 from isl_slt.losses.objectives import loss_for_window, window_denominators
 from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import bundle_tokenizer, compatibility, load_checkpoint, restore_tokenizer, save_checkpoint
+from isl_slt.training.checkpoint import guarded_improvement, inference_payload, validate_resume_compatibility
 from isl_slt.utils.io import append_event, file_hash, read_json, versions, write_json, write_jsonl
-from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything
+from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything, synchronize
 
 
 def optimizer_for(model, config: Config):
@@ -88,7 +90,9 @@ def loader_for(dataset, tokenizer, config: Config, *, training: bool, offset: in
     batches = sampler.batches()[offset:]
     generator = torch.Generator().manual_seed(config.training.seed + dataset.epoch)
     return DataLoader(dataset, batch_sampler=batches, collate_fn=Collator(tokenizer, labels=training),
-                      num_workers=config.data.workers, generator=generator), sampler
+                      num_workers=config.data.workers, generator=generator,
+                      persistent_workers=config.data.persistent_workers and config.data.workers > 0,
+                      pin_memory=config.data.pin_memory and config.runtime.device != "cpu" and torch.cuda.is_available()), sampler
 
 
 def update_window(model, optimizer, scheduler, scaler, batches, config: Config, device, weight: float) -> dict:
@@ -136,7 +140,7 @@ def update_window(model, optimizer, scheduler, scaler, batches, config: Config, 
             "gradient_norm": float(gradient_norm) if finite else None, "gradient_diagnostics": diagnostics}
 
 
-def run_training(config: Config, resume: str | None = None) -> dict:
+def run_training(config: Config, resume: str | None = None, allow_code_change: bool = False) -> dict:
     partitions, split_metadata = checked_splits(config.data)
     context_partitions = dict(partitions)
     partitions = dict(partitions)
@@ -149,7 +153,7 @@ def run_training(config: Config, resume: str | None = None) -> dict:
             raise ValueError("Overfit UIDs must all belong to the immutable training partition")
         partitions["train"], partitions["validation"] = selected, selected
         split_metadata = {**split_metadata, "hashes": {**split_metadata["hashes"], "overfit": manifest_hash(selected)}}
-    seed_everything(config.training.seed, config.runtime.deterministic)
+    seed_everything(config.training.seed, config.runtime.deterministic, config.runtime.determinism_mode == "warn")
     device, root, budget = device_for(config.runtime), Path(config.run_dir), Budget(config.runtime.wall_time_seconds)
     backend = {"device": str(device), "torch": str(torch.__version__), "hip": torch.version.hip,
                "cuda": torch.version.cuda}
@@ -173,10 +177,16 @@ def run_training(config: Config, resume: str | None = None) -> dict:
         tokenizer.save_pretrained(root / "tokenizer")
         lexicon = Lexicon.fit(training_records, config.lexical) if config.lexical.weight else None
     lexical_payload = lexicon.payload() if lexicon else None
+    if config.rgb.mode == "cached" and not restored:
+        from isl_slt.features.rgb import rgb_paths
+        _, metadata_path = rgb_paths(config, training_records[0])
+        rgb_sha = read_json(metadata_path)["signature"]["weights_sha256"]
+    else:
+        rgb_sha = file_hash(config.rgb.weights_path) if not restored and config.rgb.mode != "off" else None
     rgb_initializer = restored.get("rgb_initializer") if restored else (
-        {"revision": config.rgb.revision, "sha256": file_hash(config.rgb.weights_path),
+        {"revision": config.rgb.revision, "sha256": rgb_sha,
          "crop_revision": config.rgb.crop_revision} if config.rgb.mode != "off" else None)
-    if restored and config.rgb.mode == "cached" and (
+    if restored and config.rgb.mode == "cached" and config.data.verify_assets and (
         rgb_initializer is None or file_hash(config.rgb.weights_path) != rgb_initializer["sha256"]
     ):
         raise ValueError("Cached-RGB resume requires the original CNN initializer checksum")
@@ -194,11 +204,20 @@ def run_training(config: Config, resume: str | None = None) -> dict:
     input_dim = datasets["target"].input_dim
     if any(dataset.input_dim != input_dim for dataset in [*datasets.values(), validation]):
         raise ValueError("Stage/validation feature dimensions differ")
+    if config.rgb.mode == "cached" and any(
+        dataset.rgb_initializer != rgb_initializer["sha256"] for dataset in [*datasets.values(), validation]
+    ):
+        raise ValueError("Training stages/validation use different RGB initializers")
     artifacts = {name: dataset.cache_fingerprint for name, dataset in datasets.items()}
     artifacts["validation"] = validation.cache_fingerprint
     expected = compatibility(config, input_dim, split_metadata, tokenizer_bundle, lexical_payload, rgb_initializer, artifacts)
-    if restored is not None and restored["compatibility"] != expected:
-        raise ValueError("Resume fingerprint mismatch; do not change data, tokenizer, features or experiment")
+    if any((dataset.statistics["signature"] if dataset.statistics else None) != expected["statistics"]
+           for dataset in [*datasets.values(), validation]):
+        raise ValueError("Feature statistics changed across dataset preparation or checkpoint binding")
+    if restored is not None:
+        transition = validate_resume_compatibility(restored["compatibility"], expected, allow_code_change)
+        if transition:
+            append_event(root / "events.jsonl", kind="code_change_override", **transition)
     model = build_model(config, input_dim, tokenizer, len(lexicon.words) if lexicon else 0,
                         checkpoint_t5_config=restored["t5_config"] if restored else None,
                         restoring=restored is not None).to(device)
@@ -226,17 +245,19 @@ def run_training(config: Config, resume: str | None = None) -> dict:
 
     def save(name: str):
         payload = {"format": "isl-slt-checkpoint-v1", "run_id": run_id, "inference_only": False,
+            "checkpoint_kind": "resume",
             "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
             "scaler": scaler.state_dict(), "state": dict(state), "rng": rng_state(),
             "config": config.model_dump(mode="json"), "compatibility": expected,
             "tokenizer": tokenizer_bundle, "lexicon": lexical_payload,
             "t5_config": model.t5.config.to_dict() if hasattr(model, "t5") else None,
             "input_dim": input_dim, "initializer": asset, "versions": package_versions,
+            "feature_statistics": datasets["target"].statistics,
             "runtime_backend": backend,
             "rgb_initializer": rgb_initializer,
             "parameter_counts": {"total": sum(p.numel() for p in model.parameters()),
                                  "trainable": sum(p.numel() for p in model.parameters() if p.requires_grad)}}
-        save_checkpoint(root / "checkpoints" / name, payload)
+        save_checkpoint(root / "checkpoints" / name, payload if name == "last.pt" else inference_payload(payload))
 
     for stage_index in range(state["stage_index"], len(config.training.stages)):
         stage = config.training.stages[stage_index]
@@ -258,26 +279,52 @@ def run_training(config: Config, resume: str | None = None) -> dict:
             set_stage(model, stage)
             loader, _ = loader_for(dataset, tokenizer, config, training=True, offset=state["batch_offset"])
             iterator = iter(loader)
+            training_started = time.perf_counter()
+            state.setdefault("epoch_train_seconds", 0.0)
             while window := list(itertools.islice(iterator, config.training.gradient_accumulation_steps)):
                 if budget.expired:
+                    state["epoch_train_seconds"] += time.perf_counter() - training_started
                     save("last.pt")
                     return {"status": "wall_time_limit", "state": state, "run_dir": str(root)}
                 ramp = min(1, (state["global_epoch"] + 1) / max(config.lexical.ramp_epochs, 1))
+                synchronize(device)
+                if device.type == "cuda":
+                    torch.cuda.reset_peak_memory_stats(device)
+                update_started = time.perf_counter()
+                learning_rates = {f"{group.get('kind', 'group')}-{index}": group["lr"]
+                                  for index, group in enumerate(optimizer.param_groups)}
                 outcome = update_window(model, optimizer, scheduler, scaler, window, config, device,
                                         config.lexical.weight * ramp)
+                synchronize(device)
+                elapsed = max(time.perf_counter() - update_started, 1e-12)
+                examples = sum(batch.visual["features"].shape[0] for batch in window)
+                frames = sum(int(batch.visual["lengths"].sum()) for batch in window)
+                telemetry = {"update_seconds": elapsed, "examples": examples, "frames": frames,
+                    "examples_per_second": examples / elapsed, "frames_per_second": frames / elapsed,
+                    "learning_rates": learning_rates,
+                    "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else None}
                 state["batch_offset"] += len(window)
                 state["updates"] += int(outcome["updated"])
                 append_event(root / "events.jsonl", kind="update", stage=stage.name,
-                             epoch=state["global_epoch"], update=state["updates"], **outcome)
+                             epoch=state["global_epoch"], update=state["updates"], **telemetry, **outcome)
+            state["epoch_train_seconds"] += time.perf_counter() - training_started
             if budget.expired:
                 save("last.pt")
                 return {"status": "wall_time_limit", "state": state, "run_dir": str(root)}
             validation_loader, _ = loader_for(validation, tokenizer, config, training=False)
-            (beams, metrics, rows), candidate_scores = select_decoding(model, tokenizer, validation_loader, config, device)
+            synchronize(device)
+            validation_started = time.perf_counter()
+            (beams, metrics, rows), candidate_scores = select_decoding(
+                model, tokenizer, validation_loader, config, device, config.generation.train_beams)
+            synchronize(device)
+            validation_seconds = time.perf_counter() - validation_started
             state["selected_beams"] = beams
+            state["decoding_policy"] = "training-validation"
             state["decoding_partition"] = "inspected-training-debug" if config.training.overfit_uids else "validation"
             bleu, chrf = metrics["scores"]["bleu4"], metrics["scores"]["chrf++"]
             improved_bleu, improved_chrf = bleu > state["best_bleu"], chrf > state["best_chrf"]
+            improved_guarded = guarded_improvement(bleu, chrf, state["best_bleu"], state["best_chrf"],
+                                                  config.training.guarded_chrf_tolerance)
             state["bad_epochs"] = 0 if improved_bleu else state["bad_epochs"] + 1
             state["best_bleu"], state["best_chrf"] = max(bleu, state["best_bleu"]), max(chrf, state["best_chrf"])
             state.update(global_epoch=state["global_epoch"] + 1, epoch_in_stage=epoch + 1, batch_offset=0)
@@ -288,10 +335,15 @@ def run_training(config: Config, resume: str | None = None) -> dict:
                 "selected_beams": beams, "candidates": candidate_scores})
             append_event(root / "events.jsonl", kind="validation", stage=stage.name,
                          epoch=state["global_epoch"], selected_beams=beams, metrics=metrics)
+            append_event(root / "events.jsonl", kind="epoch", stage=stage.name, epoch=state["global_epoch"],
+                         train_seconds=state["epoch_train_seconds"], validation_seconds=validation_seconds)
+            state["epoch_train_seconds"] = 0.0
             if improved_bleu:
                 save(prefix + "best-bleu.pt")
             if improved_chrf:
                 save(prefix + "best-chrf.pt")
+            if improved_guarded:
+                save(prefix + "best-guarded.pt")
             save(f"epoch-{state['global_epoch']:04d}.pt")
             save("last.pt")
             retained = sorted((root / "checkpoints").glob("epoch-*.pt"))

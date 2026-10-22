@@ -25,3 +25,5 @@ Paths can be overridden by configuration/environment settings. Optional spaCy/BE
 Preserve model provenance and signatures with any retained experiment. Rebuild stale caches from the declared inputs instead of changing metadata to bypass integrity checks. Training checkpoints belong under [runs](../runs/README.md).
 
 See the [runbook](../docs/runbook.md), [data contracts](../docs/data_contracts.md) and [AMD/uv setup](../docs/amd_setup.md) for exact future preparation commands.
+
+Pose cache v2 adds continuous validity and needs regeneration from older caches. Optional statistics live at features.statistics_path and bind the immutable training membership. Ordinary cached training/evaluation can operate after raw-asset removal; verify-cache defaults to explicit full raw verification. Image-mode RGB and raw prediction retain their real-asset requirements.
