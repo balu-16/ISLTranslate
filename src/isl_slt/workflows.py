@@ -6,6 +6,7 @@ from isl_slt.config import Config
 from isl_slt.utils.io import file_hash, fingerprint, read_json, write_json, write_jsonl
 from isl_slt.data.context import SourceIndex
 from isl_slt.features.cache import SignatureSession
+from isl_slt.evaluation.selection import load_decoding_selection
 
 
 def planned_experiment(config: Config) -> dict:
@@ -291,11 +292,7 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
         write_json(Path(output) / "decoding.json", selection)
     else:
         if decoding:
-            selection = read_json(decoding)
-            if (selection["checkpoint_sha256"] != checkpoint_sha or selection["partition"] != "validation" or
-                selection["validation_membership_hash"] != metadata["hashes"]["validation"] or
-                selection["generation_hash"] != generation_hash):
-                raise ValueError("Decoding selection must match this checkpoint, validation split and generation settings")
+            selection = load_decoding_selection(decoding, checkpoint_sha, metadata["hashes"]["validation"], generation_hash)
             beams = selection["selected_beams"]
         else:
             if predictor.checkpoint["state"].get("decoding_policy") == "training-validation" and (
@@ -328,11 +325,12 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
     return report
 
 
-def diagnostics(config: Config, checkpoint: str, partition: str, output: str) -> dict:
+def diagnostics(config: Config, checkpoint: str, partition: str, output: str, decoding: str | None = None) -> dict:
     from isl_slt.data.dataset import LengthBuckets
     from isl_slt.evaluation.diagnostics import perturb_items
     from isl_slt.evaluation.generation import score_rows
     predictor, dataset, metadata = evaluation_inputs(config, checkpoint, partition)
+    predictor.configure_decoding(config.generation, decoding)
     if predictor.beams is None:
         raise ValueError("Diagnostics require validation-selected decoding from a trajectory checkpoint")
     import random

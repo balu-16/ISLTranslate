@@ -33,7 +33,7 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--output", required=True)
         if name in ("evaluate", "diagnostics"):
             sub.add_argument("--partition", choices=["validation", "test", "gold"], default="test")
-        if name == "evaluate":
+        if name in ("evaluate", "predict", "benchmark", "diagnostics"):
             sub.add_argument("--decoding")
         if name in ("predict", "benchmark"):
             sub.add_argument("--inputs", required=True, help="JSONL VisualInput records; reference fields are rejected")
@@ -108,10 +108,10 @@ def dispatch(args) -> dict | list:
         return report
     if command == "diagnostics":
         from isl_slt.workflows import diagnostics
-        return diagnostics(config, args.checkpoint, args.partition, args.output)
+        return diagnostics(config, args.checkpoint, args.partition, args.output, args.decoding)
     if command in ("predict", "benchmark"):
         from isl_slt.inference import Predictor, VisualInput
-        predictor = Predictor.from_checkpoint(args.checkpoint, config.runtime)
+        predictor = Predictor.from_checkpoint(args.checkpoint, config.runtime, args.decoding, config.generation)
         inputs = [VisualInput.model_validate(row) for row in read_jsonl(args.inputs)]
         if command == "predict":
             predictions = predictor.predict(inputs)

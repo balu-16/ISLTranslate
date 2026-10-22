@@ -11,11 +11,12 @@ from isl_slt.data.dataset import Collator, raw_sequence
 from isl_slt.data.context import SourceIndex
 from isl_slt.data.manifests import Record
 from isl_slt.evaluation.generation import decode_tokens
+from isl_slt.evaluation.selection import load_decoding_selection
 from isl_slt.features.pose import prepare_pose
 from isl_slt.features.statistics import apply_statistics, validate_statistics
 from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import load_checkpoint, restore_tokenizer
-from isl_slt.utils.io import file_hash
+from isl_slt.utils.io import file_hash, fingerprint
 from isl_slt.utils.runtime import autocast, device_for
 
 
@@ -49,7 +50,8 @@ class Predictor:
         self.cached_rgb_encoder = None
 
     @classmethod
-    def from_checkpoint(cls, checkpoint_path: str, runtime: Runtime | None = None):
+    def from_checkpoint(cls, checkpoint_path: str, runtime: Runtime | None = None,
+                        decoding: str | None = None, generation=None):
         payload = load_checkpoint(checkpoint_path)
         if payload.get("feature_statistics"):
             validate_statistics(payload["feature_statistics"])
@@ -68,7 +70,24 @@ class Predictor:
         device = device_for(config.runtime)
         predictor = cls(model.to(device), tokenizer, config, device, payload["state"]["selected_beams"])
         predictor.checkpoint = payload
+        predictor.checkpoint_path = Path(checkpoint_path)
+        if generation is not None or decoding is not None:
+            predictor.configure_decoding(generation or config.generation, decoding)
         return predictor
+
+    def configure_decoding(self, generation, path=None):
+        saved = Config.model_validate(self.checkpoint["config"]).generation
+        if path is not None:
+            selection = load_decoding_selection(path, file_hash(self.checkpoint_path),
+                self.checkpoint["compatibility"]["split_hashes"]["validation"],
+                fingerprint(generation.model_dump(mode="json")))
+            self.beams = selection["selected_beams"]
+        else:
+            state = self.checkpoint["state"]
+            needs_sweep = state.get("decoding_policy") == "training-validation" and set(saved.train_beams) != set(generation.beams)
+            if generation != saved or self.beams is None or state.get("decoding_partition") != "validation" or needs_sweep:
+                raise ValueError("Supply --decoding from this checkpoint's final validation beam selection")
+        self.config = self.config.model_copy(update={"generation": generation})
 
     def prepare(self, inputs: list[VisualInput]) -> list[dict]:
         records = [item.as_record() for item in inputs]
