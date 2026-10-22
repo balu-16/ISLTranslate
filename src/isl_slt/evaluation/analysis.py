@@ -30,7 +30,8 @@ def aggregate_runs(paths: list[str]) -> dict:
     summary = {name: {"mean": statistics.mean(values := [r["metrics"]["scores"][name] for r in reports]),
                       "std": statistics.stdev(values) if len(values) > 1 else 0.0} for name in sorted(metric_names)}
     return {"individual": [{"seed": r["seed"], "scores": r["metrics"]["scores"],
-                            "unavailable": r["metrics"].get("unavailable", {})} for r in reports],
+                            "unavailable": r["metrics"].get("unavailable", {}),
+                            "checkpoint_bytes": r.get("checkpoint_bytes")} for r in reports],
             "summary": summary, "std_policy": "sample standard deviation; zero for a single run",
             "partition": reports[0]["partition"], "membership_hash": reports[0]["membership_hash"],
             "prediction_pooling": False}

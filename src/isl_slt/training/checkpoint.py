@@ -64,6 +64,13 @@ def save_checkpoint(path: str | Path, payload: dict) -> None:
         torch.save(payload, stream)
 
 
+def inference_payload(payload: dict) -> dict:
+    """Keep every reconstruction/provenance field; remove only continuation state."""
+    return {key: value for key, value in payload.items()
+            if key not in {"optimizer", "scheduler", "scaler", "rng"}} | {
+                "inference_only": True, "checkpoint_kind": "inference"}
+
+
 def load_checkpoint(path: str | Path, expected: dict | None = None) -> dict:
     # RNG/optimizer state contains Python/NumPy structures: explicitly trusted local pickle is necessary.
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
@@ -101,7 +108,8 @@ def average_checkpoints(paths: list[str], destination: str) -> dict:
             elif not torch.equal(tensor, nonfloating[name]):
                 raise ValueError(f"Nonfloating buffer differs and cannot be averaged: {name}")
     first["model"] = {name: value.to(first["model"][name].dtype) for name, value in result.items()} | nonfloating
-    first.update(optimizer=None, scheduler=None, scaler=None, rng=None, inference_only=True,
+    first = inference_payload(first)
+    first.update(checkpoint_kind="averaged",
                  averaged_from=[{"path": path, "sha256": file_hash(path)} for path in paths])
     # Parent-specific decoding is invalid for averaged weights; evaluation must first select on validation.
     first["state"]["selected_beams"] = None

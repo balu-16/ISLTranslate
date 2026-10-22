@@ -17,7 +17,7 @@ from isl_slt.evaluation.generation import select_decoding
 from isl_slt.losses.objectives import loss_for_window, window_denominators
 from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import bundle_tokenizer, compatibility, load_checkpoint, restore_tokenizer, save_checkpoint
-from isl_slt.training.checkpoint import guarded_improvement
+from isl_slt.training.checkpoint import guarded_improvement, inference_payload
 from isl_slt.utils.io import append_event, file_hash, read_json, versions, write_json, write_jsonl
 from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything
 
@@ -235,6 +235,7 @@ def run_training(config: Config, resume: str | None = None) -> dict:
 
     def save(name: str):
         payload = {"format": "isl-slt-checkpoint-v1", "run_id": run_id, "inference_only": False,
+            "checkpoint_kind": "resume",
             "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
             "scaler": scaler.state_dict(), "state": dict(state), "rng": rng_state(),
             "config": config.model_dump(mode="json"), "compatibility": expected,
@@ -246,7 +247,7 @@ def run_training(config: Config, resume: str | None = None) -> dict:
             "rgb_initializer": rgb_initializer,
             "parameter_counts": {"total": sum(p.numel() for p in model.parameters()),
                                  "trainable": sum(p.numel() for p in model.parameters() if p.requires_grad)}}
-        save_checkpoint(root / "checkpoints" / name, payload)
+        save_checkpoint(root / "checkpoints" / name, payload if name == "last.pt" else inference_payload(payload))
 
     for stage_index in range(state["stage_index"], len(config.training.stages)):
         stage = config.training.stages[stage_index]

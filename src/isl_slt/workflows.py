@@ -319,7 +319,8 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
               "protocol": metadata["protocol"], "seed": predictor.config.training.seed,
               "comparison_fingerprint": comparison_fingerprint(predictor, effective), "selected_beams": beams,
               "effective_evaluation": effective, "evaluation_fingerprint": fingerprint(effective),
-              "checkpoint_sha256": checkpoint_sha, "metrics": metric_report,
+              "checkpoint_sha256": checkpoint_sha, "checkpoint_bytes": Path(checkpoint).stat().st_size,
+              "checkpoint_kind": predictor.checkpoint.get("checkpoint_kind", "legacy"), "metrics": metric_report,
               "runtime": config.runtime.model_dump(mode="json"),
               "context_lookahead_seconds": config.context.next_seconds if config.context.enabled else 0,
               "parameter_counts": predictor.checkpoint["parameter_counts"]}
