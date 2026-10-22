@@ -249,6 +249,17 @@ See [experiments](experiments.md) for optional run sequences and [implementation
 
 ## Asset acquisition and layout
 
+Plan target selection before extracting anything. This reads remote ZIP end/index ranges, prints exact selected compressed/uncompressed sizes, and downloads no member payloads. Obtain the annotation CSV separately and pin the configured dataset revision:
+
+```bash
+uv run --no-sync --env-file .env python scripts/fetch_isign.py --plan --uids-csv data/raw/ISLTranslate.csv --config configs/baseline.yaml --allow-network
+uv run --no-sync --env-file .env python scripts/fetch_isign.py --fetch --uids-csv data/raw/ISLTranslate.csv --config configs/baseline.yaml --out data/raw/poses --allow-network
+```
+
+Remote parts resolve to one immutable Hub commit. Exact HTTP ranges are checked before any body is consumed, avoiding a silent whole-part download when ranges fail. Multipart input also accepts sized seekable streams, including HfFileSystem-compatible readers. No whole-archive concatenated copy is made. An explicit `--fetch --transport staged` fallback reads the last part first and evicts staging files before each new part, bounding staging to two parts including temporary bytes; its cost is printed before download. It is never automatically selected by `--plan`.
+
+For optional transfer, promote both source maps first and pass `--dataset pretrain --uids-csv data/raw/iSign_v1.1.csv --config configs/transfer.yaml --budget-bytes YOUR_COMPRESSED_BYTE_BUDGET --selection-seed 2026`. Every target source, UID, known fingerprint and normalized-text duplicate is excluded. Eligible clips are grouped by source and selected in deterministic seeded order without exceeding the compressed-byte budget. No percentage or default budget is assumed. Point `data.pretrain.annotations` at the generated `selected-annotations.csv`, preserve the original revision and authoritative mapping, then audit the acquired poses; the same strict exclusions are rechecked. Changed transfer policy requires new split paths.
+
 These commands are for later explicit network authorization. Listing does not download the pose parts; CSV and full-part flags are separate:
 
 ```bash

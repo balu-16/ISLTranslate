@@ -104,7 +104,7 @@ The standard split reserves every parent source containing an interpreter exampl
 
 Split output contains `train.jsonl`, `validation.jsonl`, `test.jsonl`, `gold.jsonl`, `splits.json` and `leakage.json`. Transfer adds `pretrain.jsonl` and `pretraining-filter.json`. Membership hashes cover canonical record content. Loading splits rechecks hashes, source/UID/known-content disjointness and filter metadata; changing the training seed does not recreate memberships.
 
-Additional pretraining excludes unresolved/unverified sources, all target UIDs, target held-out parents and known target or within-pool duplicates. Sharing a verified parent with target training can be permitted for otherwise distinct eligible examples; held-out target parents remain excluded. Actual eligible counts come from the contamination report.
+Additional pretraining excludes unresolved/unverified sources, every target parent (including training), all target UIDs, known fingerprints and Unicode-NFKC/casefold/whitespace-normalized text duplicates against target and retained pool rows. Before acquisition, eligible rows are grouped by source and selected with an explicit compressed-byte budget and seed 2026. Audit/splitting rechecks eligibility with real poses. Reports declare `all-target-sources-and-normalized-text-v2`; old transfer splits must be regenerated at new paths. Actual eligible counts and byte totals come from reports.
 
 ## Feature and model assets
 
