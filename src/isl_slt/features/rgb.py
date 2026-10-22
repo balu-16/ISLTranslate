@@ -149,18 +149,22 @@ class RGBEncoder(nn.Module):
         return torch.cat(outputs).reshape(*shape, 512)
 
 
-def rgb_signature(config: Config, center: Record, dependencies: list[Record]) -> dict:
+def rgb_signature(config: Config, center: Record, dependencies: list[Record],
+                  verify_assets: bool = True, weights_sha256: str | None = None) -> dict:
     dependency_signatures = []
     for record in sorted(dependencies, key=lambda r: r.key):
         if not record.video_path or record.image_transform is None:
             raise ValueError(f"{record.uid}: RGB requires video and verified coordinate-transform metadata")
-        video_hash = file_hash(record.video_path)
+        if "video" not in record.asset_hashes:
+            raise ValueError(f"{record.uid}: audited video checksum is required")
+        video_hash = file_hash(record.video_path) if verify_assets else record.asset_hashes["video"]
         if record.asset_hashes.get("video", video_hash) != video_hash:
             raise ValueError(f"{record.uid}: video bytes changed since immutable manifest creation")
-        dependency_signatures.append({**record_signature(record), "video_sha256": video_hash,
+        dependency_signatures.append({**record_signature(record, verify_assets), "video_sha256": video_hash,
                                       "image_transform": record.image_transform})
     return {"version": "rgb-cache-v1", "pose_preprocessing": preprocessing_fingerprint(config),
-            "settings": config.rgb.model_dump(mode="json"), "weights_sha256": file_hash(config.rgb.weights_path),
+            "settings": config.rgb.model_dump(mode="json"),
+            "weights_sha256": file_hash(config.rgb.weights_path) if verify_assets else weights_sha256,
             "center": center.key, "dependencies": dependency_signatures}
 
 
@@ -179,10 +183,11 @@ def write_rgb(config: Config, record: Record, dependencies: list[Record], values
 
 
 def read_rgb(config: Config, record: Record, dependencies: list[Record], times: np.ndarray,
-             verify_assets: bool = True):
+             verify_assets: bool = False):
     arrays, meta = rgb_paths(config, record)
     metadata = read_json(meta)
-    incompatible_assets = verify_assets and metadata["signature"] != rgb_signature(config, record, dependencies)
+    incompatible_assets = metadata["signature"] != rgb_signature(config, record, dependencies, verify_assets,
+                                                                metadata["signature"]["weights_sha256"])
     if incompatible_assets or metadata["sha256"] != file_hash(arrays):
         raise ValueError(f"{record.uid}: incompatible RGB cache; regenerate it explicitly")
     with np.load(arrays, allow_pickle=False) as loaded:

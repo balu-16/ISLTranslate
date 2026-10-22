@@ -17,10 +17,12 @@ def preprocessing_fingerprint(config: Config) -> str:
                         "context": config.context.model_dump(mode="json")})
 
 
-def record_signature(record: Record) -> dict:
+def record_signature(record: Record, verify_assets: bool = True) -> dict:
     """Visual identity deliberately excludes all target and interpreter text."""
-    pose_hash = file_hash(record.pose_path)
-    timestamps_hash = file_hash(record.timestamps_path) if record.timestamps_path else None
+    if "pose" not in record.asset_hashes or (record.timestamps_path and "timestamps" not in record.asset_hashes):
+        raise ValueError(f"{record.uid}: audited manifest asset checksums are required")
+    pose_hash = file_hash(record.pose_path) if verify_assets else record.asset_hashes["pose"]
+    timestamps_hash = (file_hash(record.timestamps_path) if verify_assets else record.asset_hashes["timestamps"]) if record.timestamps_path else None
     for name, actual in (("pose", pose_hash), ("timestamps", timestamps_hash)):
         if name in record.asset_hashes and record.asset_hashes[name] != actual:
             raise ValueError(f"{record.uid}: {name} changed since immutable manifest creation")
@@ -55,18 +57,17 @@ def write_features(config: Config, record: Record, prepared: Prepared, dependenc
 
 
 def read_features(config: Config, record: Record, dependencies: list[Record] | None = None,
-                  verify_assets: bool = True) -> Prepared:
+                  verify_assets: bool = False) -> Prepared:
     arrays_path, metadata_path = cache_paths(config, record)
     metadata = read_json(metadata_path)
     if metadata["version"] != CACHE_VERSION or metadata["preprocessing"] != preprocessing_fingerprint(config):
         raise ValueError(f"{record.uid}: stale/incompatible feature cache")
     if metadata["record_key"] != record.key or file_hash(arrays_path) != metadata["arrays_sha256"]:
         raise ValueError(f"{record.uid}: cache identity or array checksum mismatch")
-    if verify_assets:
-        candidates = dependencies if dependencies is not None else [record]
-        signatures = [record_signature(row) for row in sorted(candidates, key=lambda r: r.key)]
-        if signatures != metadata["dependencies"]:
-            raise ValueError(f"{record.uid}: source assets/metadata changed; regenerate features")
+    candidates = dependencies if dependencies is not None else [record]
+    signatures = [record_signature(row, verify_assets) for row in sorted(candidates, key=lambda r: r.key)]
+    if signatures != metadata["dependencies"]:
+        raise ValueError(f"{record.uid}: manifest/source metadata changed; regenerate features")
     with np.load(arrays_path, allow_pickle=False) as arrays:
         return Prepared(**{name: arrays[name].copy() for name in (
             "values", "times", "observed", "imputed", "position_valid", "velocity_valid", "regions", "segments", "continuous_valid")},

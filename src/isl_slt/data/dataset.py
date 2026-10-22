@@ -32,9 +32,10 @@ def raw_sequence(record: Record, records: list[Record], config: Config):
 
 class PoseDataset(Dataset):
     def __init__(self, records: list[Record], config: Config, lexicon: Lexicon | None = None,
-                 training: bool = False, preflight: bool = True, context_records: list[Record] | None = None):
+                 training: bool = False, preflight: bool | None = None, context_records: list[Record] | None = None):
         self.records, self.config, self.lexicon, self.training = records, config, lexicon, training
         self.epoch = 0
+        preflight = config.data.verify_assets if preflight is None else preflight
         self.statistics = load_statistics(config)
         self.context_records = context_records if context_records is not None else records
         self.lengths, self.input_dim, cache_identities, video_hashes = [], None, [], {}
@@ -46,9 +47,10 @@ class PoseDataset(Dataset):
             self.input_dim = prepared.values.shape[1]
             cache_identity = {"key": record.key, "arrays": prepared.metadata["arrays_sha256"],
                               "dependencies": prepared.metadata["dependencies"]}
-            if config.rgb.mode == "cached" and preflight:
+            if config.rgb.mode == "cached":
                 from isl_slt.features.rgb import read_rgb, rgb_paths
-                read_rgb(config, record, dependencies_for(record, self.context_records, config), prepared.times)
+                read_rgb(config, record, dependencies_for(record, self.context_records, config), prepared.times,
+                         verify_assets=preflight)
                 _, rgb_metadata = rgb_paths(config, record)
                 cache_identity["rgb"] = read_json(rgb_metadata)
             if config.rgb.mode != "off" and preflight:
@@ -69,7 +71,8 @@ class PoseDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict:
         record = self.records[index]
-        prepared = read_features(self.config, record, verify_assets=False)
+        prepared = read_features(self.config, record, dependencies_for(record, self.context_records, self.config),
+                                 verify_assets=False)
         features = torch.from_numpy(apply_statistics(prepared, self.statistics))
         generator = torch.Generator().manual_seed(self.config.training.seed + self.epoch * 1000003 + index)
         if self.training and self.config.training.pose_noise_std:

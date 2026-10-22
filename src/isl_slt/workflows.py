@@ -153,6 +153,23 @@ def prepare_features(config: Config) -> dict:
             "counts": {name: len(rows) for name, rows in results.items()}}
 
 
+def verify_cache(config: Config, verify_assets: bool = True) -> dict:
+    from isl_slt.data.dataset import dependencies_for
+    from isl_slt.data.splits import checked_splits
+    from isl_slt.features.cache import read_features
+    partitions, _ = checked_splits(config.data)
+    counts = {}
+    for name, records in partitions.items():
+        for record in records:
+            dependencies = dependencies_for(record, records, config)
+            prepared = read_features(config, record, dependencies, verify_assets=verify_assets)
+            if config.rgb.mode == "cached":
+                from isl_slt.features.rgb import read_rgb
+                read_rgb(config, record, dependencies, prepared.times, verify_assets=verify_assets)
+        counts[name] = len(records)
+    return {"verified_cache_counts": counts, "raw_assets_verified": verify_assets}
+
+
 def prepare_model(config: Config, allow_network: bool) -> dict:
     if not allow_network:
         raise ValueError("Model preparation requires explicit --allow-network; ordinary operations stay local")

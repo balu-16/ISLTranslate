@@ -51,6 +51,7 @@ class Data(Strict):
     protocol: Literal["source-held-out", "exploratory-unverified", "original-paper"] = "source-held-out"
     original_splits_csv: str | None = None
     workers: int = Field(default=0, ge=0)
+    verify_assets: bool = False
 
 
 class Features(Strict):

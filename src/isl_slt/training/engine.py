@@ -174,10 +174,16 @@ def run_training(config: Config, resume: str | None = None) -> dict:
         tokenizer.save_pretrained(root / "tokenizer")
         lexicon = Lexicon.fit(training_records, config.lexical) if config.lexical.weight else None
     lexical_payload = lexicon.payload() if lexicon else None
+    if config.rgb.mode == "cached" and not restored:
+        from isl_slt.features.rgb import rgb_paths
+        _, metadata_path = rgb_paths(config, training_records[0])
+        rgb_sha = read_json(metadata_path)["signature"]["weights_sha256"]
+    else:
+        rgb_sha = file_hash(config.rgb.weights_path) if not restored and config.rgb.mode != "off" else None
     rgb_initializer = restored.get("rgb_initializer") if restored else (
-        {"revision": config.rgb.revision, "sha256": file_hash(config.rgb.weights_path),
+        {"revision": config.rgb.revision, "sha256": rgb_sha,
          "crop_revision": config.rgb.crop_revision} if config.rgb.mode != "off" else None)
-    if restored and config.rgb.mode == "cached" and (
+    if restored and config.rgb.mode == "cached" and config.data.verify_assets and (
         rgb_initializer is None or file_hash(config.rgb.weights_path) != rgb_initializer["sha256"]
     ):
         raise ValueError("Cached-RGB resume requires the original CNN initializer checksum")
