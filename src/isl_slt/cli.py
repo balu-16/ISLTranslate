@@ -59,8 +59,11 @@ def parser() -> argparse.ArgumentParser:
     estimate = commands.add_parser("estimate")
     estimate.add_argument("--examples", type=int, required=True)
     estimate.add_argument("--epochs", type=int, required=True)
-    estimate.add_argument("--measured-examples-per-second", type=float, required=True)
-    estimate.add_argument("--validation-seconds-per-epoch", type=float, required=True)
+    estimate.add_argument("--measured-examples-per-second", type=float)
+    estimate.add_argument("--validation-seconds-per-epoch", type=float)
+    estimate.add_argument("--run-summary", help="Measured completed-epoch stage summary JSON")
+    estimate.add_argument("--stage", help="Explicit stage in --run-summary")
+    estimate.add_argument("--output")
     estimate.add_argument("--hourly-price", type=float)
     return result
 
@@ -145,8 +148,22 @@ def dispatch(args) -> dict | list:
         report = paired_source_bootstrap(read_jsonl(args.first), read_jsonl(args.second), args.samples, args.seed)
     elif command == "estimate":
         from isl_slt.evaluation.analysis import estimate_budget
-        return estimate_budget(args.examples, args.epochs, args.measured_examples_per_second,
-                               args.validation_seconds_per_epoch, args.hourly_price)
+        throughput, validation = args.measured_examples_per_second, args.validation_seconds_per_epoch
+        if args.run_summary:
+            from isl_slt.utils.io import read_json
+            if not args.stage or throughput is not None or validation is not None:
+                raise ValueError("--run-summary requires --stage and cannot mix manual throughput/validation inputs")
+            stage = read_json(args.run_summary).get("stages", {}).get(args.stage)
+            if not stage or not stage.get("examples_per_second"):
+                raise ValueError("Stage has no measured completed-epoch throughput")
+            throughput, validation = stage["examples_per_second"], stage["validation_seconds_per_epoch"]
+        elif args.stage or throughput is None or validation is None:
+            raise ValueError("Supply both measured values, or --run-summary with --stage")
+        report = estimate_budget(args.examples, args.epochs, throughput, validation, args.hourly_price)
+        report["measurement_source"] = {"summary": args.run_summary, "stage": args.stage}
+        if args.output:
+            write_json(args.output, report)
+        return report
     else:
         raise ValueError(f"Unknown command {command}")
     write_json(args.output, report)

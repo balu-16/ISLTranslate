@@ -287,9 +287,12 @@ Interrupted acquisition resumes with the same arguments plus `--resume`. `extrac
 
 ```bash
 uv run --no-sync python scripts/summarize_run.py runs/baseline --output runs/baseline/training-summary.json
+uv run --no-sync python -m isl_slt estimate --examples ACTUAL_TRAIN_COUNT --epochs 19 --run-summary runs/baseline/training-summary.json --stage joint
 ```
 
 Logs contain actual applied group LRs, synchronized update seconds, examples/frames throughput, allocated GPU peaks and separate epoch train/validation time. Update throughput excludes input-window loading; epoch training time includes it. Setup/checkpoint I/O is excluded. Supply measured values to `estimate`; inference latency is not training throughput.
+
+Completed-epoch example/frame counters and elapsed time persist across interruptions. Summary `stages` rates divide completed-epoch counts by their total training time, including loader setup/loading. Partial epochs and legacy epochs without counters cannot supply an estimate. `estimate --run-summary --stage` uses that rate and measured stage validation time; replace `ACTUAL_TRAIN_COUNT` with the audited count. Adapter/pretrain/joint stages are reported separately.
 
 Only `last.pt` retains continuation state. Best/epoch/averaged checkpoints keep complete inference reconstruction metadata without optimizer/RNG state. `best-guarded.pt` additionally uses the historical chrF tolerance policy.
 

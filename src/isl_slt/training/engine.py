@@ -298,10 +298,12 @@ def _run_training(config: Config, resume: str | None = None, allow_code_change: 
             dataset.epoch = state["global_epoch"]
             model.train()
             set_stage(model, stage)
+            training_started = time.perf_counter()
             loader, _ = loader_for(dataset, tokenizer, config, training=True, offset=state["batch_offset"])
             iterator = iter(loader)
-            training_started = time.perf_counter()
             state.setdefault("epoch_train_seconds", 0.0)
+            state.setdefault("epoch_examples", 0)
+            state.setdefault("epoch_frames", 0)
             while window := list(itertools.islice(iterator, config.training.gradient_accumulation_steps)):
                 if budget.expired:
                     state["epoch_train_seconds"] += time.perf_counter() - training_started
@@ -326,6 +328,8 @@ def _run_training(config: Config, resume: str | None = None, allow_code_change: 
                     "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else None}
                 state["batch_offset"] += len(window)
                 state["updates"] += int(outcome["updated"])
+                state["epoch_examples"] += examples
+                state["epoch_frames"] += frames
                 append_event(root / "events.jsonl", kind="update", stage=stage.name,
                              epoch=state["global_epoch"], update=state["updates"], **telemetry, **outcome)
             state["epoch_train_seconds"] += time.perf_counter() - training_started
@@ -357,8 +361,10 @@ def _run_training(config: Config, resume: str | None = None, allow_code_change: 
             append_event(root / "events.jsonl", kind="validation", stage=stage.name,
                          epoch=state["global_epoch"], selected_beams=beams, metrics=metrics)
             append_event(root / "events.jsonl", kind="epoch", stage=stage.name, epoch=state["global_epoch"],
-                         train_seconds=state["epoch_train_seconds"], validation_seconds=validation_seconds)
-            state["epoch_train_seconds"] = 0.0
+                         train_seconds=state["epoch_train_seconds"], validation_seconds=validation_seconds,
+                         examples=state["epoch_examples"], frames=state["epoch_frames"],
+                         examples_per_second=state["epoch_examples"] / max(state["epoch_train_seconds"], 1e-12))
+            state.update(epoch_train_seconds=0.0, epoch_examples=0, epoch_frames=0)
             names = [prefix + name for improved, name in (
                 (improved_bleu, "best-bleu.pt"), (improved_chrf, "best-chrf.pt"),
                 (improved_guarded, "best-guarded.pt")) if improved]
