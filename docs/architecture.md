@@ -68,6 +68,8 @@ Continuation checkpoints (`last.pt`) contain model, optimizer, scheduler, scaler
 
 ## Package ownership
 
+Each run writes `parameter_counts.json` and embeds the inventory in checkpoints/evaluation reports. It records unique total, visual, T5 and other parameters plus trainable counts for every configured stage (including RGB final-block tuning). Tied T5 embeddings are counted once and buffers are excluded. Checkpoints additionally record the trainable count at save time; inventory calculation does not change model modes or gradient flags.
+
 | Package | Responsibility |
 | --- | --- |
 | `data` | Input adapters, canonical records, pose loading, source splits, context, batches and text resources |

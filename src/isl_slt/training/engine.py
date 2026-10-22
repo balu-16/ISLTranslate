@@ -49,6 +49,26 @@ def set_stage(model, stage: Stage) -> None:
         model.visual.rgb_encoder.set_tuning(stage.tune_rgb)
 
 
+def parameter_inventory(model, config: Config) -> dict:
+    """Count unique parameters (including tied T5 embeddings) without changing stage state."""
+    parameters = {id(p): p for p in model.parameters()}
+    visual = {id(p) for p in model.visual.parameters()}
+    t5 = {id(p) for p in model.t5.parameters()} if hasattr(model, "t5") else set()
+    rgb_module = model.visual.rgb_encoder
+    rgb = {id(p) for p in rgb_module.parameters()} if rgb_module is not None else set()
+    tuned_rgb = {id(p) for p in rgb_module.network[7].parameters()} if rgb_module is not None else set()
+    def count(ids):
+        return sum(parameters[key].numel() for key in ids)
+    stages = {}
+    for stage in config.training.stages:
+        enabled = (parameters.keys() - t5 - rgb) | (t5 if not stage.freeze_t5 else set()) | (tuned_rgb if stage.tune_rgb else set())
+        stages[stage.name] = {"trainable": count(enabled), "visual_trainable": count(enabled & visual),
+                              "t5_trainable": count(enabled & t5), "rgb_trainable": count(enabled & rgb)}
+    return {"total": count(parameters.keys()), "visual": count(visual), "t5": count(t5),
+            "other": count(parameters.keys() - visual - t5), "per_stage": stages,
+            "counting_policy": "Unique parameter objects; tied weights counted once; buffers excluded"}
+
+
 class StageScheduler:
     """A new cosine schedule per explicit stage; optimizer moments survive transitions."""
     def __init__(self, optimizer, warmup_ratio: float):
@@ -260,6 +280,8 @@ def _run_training(config: Config, resume: str | None = None, allow_code_change: 
     asset = read_json(Path(config.model.t5_dir) / "asset.json") if config.model.decoder == "t5" and not restored else (
         restored.get("initializer") if restored else {"type": "training-only-BPE"})
     package_versions = versions()
+    counts = parameter_inventory(model, config)
+    write_json(root / "parameter_counts.json", counts)
 
     def payload():
         payload = {"format": "isl-slt-checkpoint-v1", "run_id": run_id, "inference_only": False,
@@ -273,8 +295,7 @@ def _run_training(config: Config, resume: str | None = None, allow_code_change: 
             "feature_statistics": datasets["target"].statistics,
             "runtime_backend": backend,
             "rgb_initializer": rgb_initializer,
-            "parameter_counts": {"total": sum(p.numel() for p in model.parameters()),
-                                 "trainable": sum(p.numel() for p in model.parameters() if p.requires_grad)}}
+            "parameter_counts": {**counts, "trainable": sum(p.numel() for p in model.parameters() if p.requires_grad)}}
         return payload
 
     def save(name: str):

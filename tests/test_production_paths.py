@@ -8,7 +8,7 @@ import torch
 from isl_slt.config import Config, Features, Stage
 from isl_slt.data.dataset import Batch
 from isl_slt.features.pose import interpolate_short_gaps, motion, normalize_positions, prepare_pose, selected_joints
-from isl_slt.training.engine import StageScheduler, optimizer_for, set_stage, update_window
+from isl_slt.training.engine import StageScheduler, optimizer_for, parameter_inventory, set_stage, update_window
 
 
 def test_pose_format_roundtrip(pose_writer, record_factory, tmp_path):
@@ -89,6 +89,12 @@ def test_optimizer_registration_survives_t5_freeze_unfreeze():
     set_stage(model, Stage(name="joint", epochs=1))
     assert all(p.requires_grad for p in model.t5.parameters())
     assert registered == [id(p) for group in optimizer.param_groups for p in group["params"]]
+    inventory = parameter_inventory(model, config)
+    assert inventory["total"] == sum(p.numel() for p in model.parameters())
+    assert inventory["total"] == inventory["visual"] + inventory["t5"] + inventory["other"]
+    assert inventory["per_stage"]["adapter"]["t5_trainable"] == 0
+    assert inventory["per_stage"]["joint"]["t5_trainable"] == inventory["t5"]
+    assert all(p.requires_grad for p in model.t5.parameters())
 
 
 def test_filter_pretraining_excludes_target_training_parent_and_text(record_factory):
