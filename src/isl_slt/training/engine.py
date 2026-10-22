@@ -3,6 +3,7 @@
 import itertools
 import math
 import uuid
+import time
 from pathlib import Path
 
 import torch
@@ -19,7 +20,7 @@ from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import bundle_tokenizer, compatibility, load_checkpoint, restore_tokenizer, save_checkpoint
 from isl_slt.training.checkpoint import guarded_improvement, inference_payload, validate_resume_compatibility
 from isl_slt.utils.io import append_event, file_hash, read_json, versions, write_json, write_jsonl
-from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything
+from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything, synchronize
 
 
 def optimizer_for(model, config: Config):
@@ -271,23 +272,44 @@ def run_training(config: Config, resume: str | None = None, allow_code_change: b
             set_stage(model, stage)
             loader, _ = loader_for(dataset, tokenizer, config, training=True, offset=state["batch_offset"])
             iterator = iter(loader)
+            training_started = time.perf_counter()
+            state.setdefault("epoch_train_seconds", 0.0)
             while window := list(itertools.islice(iterator, config.training.gradient_accumulation_steps)):
                 if budget.expired:
+                    state["epoch_train_seconds"] += time.perf_counter() - training_started
                     save("last.pt")
                     return {"status": "wall_time_limit", "state": state, "run_dir": str(root)}
                 ramp = min(1, (state["global_epoch"] + 1) / max(config.lexical.ramp_epochs, 1))
+                synchronize(device)
+                if device.type == "cuda":
+                    torch.cuda.reset_peak_memory_stats(device)
+                update_started = time.perf_counter()
                 outcome = update_window(model, optimizer, scheduler, scaler, window, config, device,
                                         config.lexical.weight * ramp)
+                synchronize(device)
+                elapsed = max(time.perf_counter() - update_started, 1e-12)
+                examples = sum(batch.visual["features"].shape[0] for batch in window)
+                frames = sum(int(batch.visual["lengths"].sum()) for batch in window)
+                telemetry = {"update_seconds": elapsed, "examples": examples, "frames": frames,
+                    "examples_per_second": examples / elapsed, "frames_per_second": frames / elapsed,
+                    "learning_rates": {f"{group.get('kind', 'group')}-{index}": group["lr"]
+                                       for index, group in enumerate(optimizer.param_groups)},
+                    "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else None}
                 state["batch_offset"] += len(window)
                 state["updates"] += int(outcome["updated"])
                 append_event(root / "events.jsonl", kind="update", stage=stage.name,
-                             epoch=state["global_epoch"], update=state["updates"], **outcome)
+                             epoch=state["global_epoch"], update=state["updates"], **telemetry, **outcome)
+            state["epoch_train_seconds"] += time.perf_counter() - training_started
             if budget.expired:
                 save("last.pt")
                 return {"status": "wall_time_limit", "state": state, "run_dir": str(root)}
             validation_loader, _ = loader_for(validation, tokenizer, config, training=False)
+            synchronize(device)
+            validation_started = time.perf_counter()
             (beams, metrics, rows), candidate_scores = select_decoding(
                 model, tokenizer, validation_loader, config, device, config.generation.train_beams)
+            synchronize(device)
+            validation_seconds = time.perf_counter() - validation_started
             state["selected_beams"] = beams
             state["decoding_policy"] = "training-validation"
             state["decoding_partition"] = "inspected-training-debug" if config.training.overfit_uids else "validation"
@@ -305,6 +327,9 @@ def run_training(config: Config, resume: str | None = None, allow_code_change: b
                 "selected_beams": beams, "candidates": candidate_scores})
             append_event(root / "events.jsonl", kind="validation", stage=stage.name,
                          epoch=state["global_epoch"], selected_beams=beams, metrics=metrics)
+            append_event(root / "events.jsonl", kind="epoch", stage=stage.name, epoch=state["global_epoch"],
+                         train_seconds=state["epoch_train_seconds"], validation_seconds=validation_seconds)
+            state["epoch_train_seconds"] = 0.0
             if improved_bleu:
                 save(prefix + "best-bleu.pt")
             if improved_chrf:
