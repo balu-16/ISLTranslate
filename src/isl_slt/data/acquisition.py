@@ -4,16 +4,17 @@ import argparse
 import json
 import os
 from pathlib import Path, PurePosixPath
-import shutil
 import stat
 import zipfile
+import hashlib
+import zlib
 from contextlib import ExitStack
 
 from isl_slt.config import Features, load_config
 from isl_slt.data.manifests import Record, adapt_csv, load_manifest
 from isl_slt.data.pose import decode_pose
 from isl_slt.features.pose import selected_joints
-from isl_slt.utils.io import atomic_open, file_hash, fingerprint, write_json
+from isl_slt.utils.io import atomic_open, directory_lock, file_hash, fingerprint, read_json, write_json
 
 
 from isl_slt.data.archives import ArchivePart, MultipartReader, RangeFile, StagedParts
@@ -131,13 +132,23 @@ def remote_parts(repo, revision, token=None):
     return parts, urls
 
 
+def file_identity(path):
+    size, crc, digest = 0, 0, hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            size += len(block)
+            crc = zlib.crc32(block, crc)
+            digest.update(block)
+    return {"bytes": size, "crc32": crc & 0xffffffff, "sha256": digest.hexdigest()}
+
+
 def extract_selected(parts, records, output, *, settings=None, max_bytes=50 * 1024**3,
-                     inspect_sample=True) -> dict:
+                     inspect_sample=True, resume=False, selection_sha256=None) -> dict:
     records = list(records)
     if not records or len({row.uid for row in records}) != len(records):
         raise ValueError("Extraction needs nonempty unique manifest UIDs")
     output = Path(output)
-    with MultipartReader(parts) as combined, zipfile.ZipFile(combined) as archive:
+    with directory_lock(output, ".extraction.lock"), MultipartReader(parts) as combined, zipfile.ZipFile(combined) as archive:
         index = pose_index(archive)
         missing = [row.uid for row in records if row.uid not in index]
         if missing:
@@ -145,22 +156,67 @@ def extract_selected(parts, records, output, *, settings=None, max_bytes=50 * 10
         selected = {row.uid: index[row.uid] for row in records}
         if sum(row["bytes"] for row in selected.values()) > max_bytes:
             raise ValueError("Selected extraction exceeds max_bytes")
-        if any((output / f"{row.uid}.pose").exists() for row in records):
-            raise ValueError("Extraction refuses to overwrite existing pose files")
+        binding = {"archives": combined.identity, "selection": fingerprint(sorted(r.uid for r in records)),
+                   "request_sha256": selection_sha256,
+                   "datasets": sorted({(r.dataset_name, r.dataset_revision) for r in records}), "members": selected}
+        binding = json.loads(json.dumps(binding, sort_keys=True))
+        journal_path = output / "extraction.journal.json"
+        if resume:
+            if not journal_path.exists():
+                raise ValueError("--resume requires the existing extraction journal")
+            journal = read_json(journal_path)
+            if journal.get("binding") != binding or journal.get("format") != "isl-slt-extraction-journal-v1":
+                raise ValueError("Extraction revision/archive/selection differs from journal")
+        else:
+            if journal_path.exists() or any((output / f"{row.uid}.pose").exists() for row in records):
+                raise ValueError("Extraction refuses to overwrite existing pose files/journal; use --resume")
+            journal = {"format": "isl-slt-extraction-journal-v1", "binding": binding, "files": {}, "sample": None}
+            write_json(journal_path, journal)
+        written, reused = [], []
+        for record in records:
+            target = output / f"{record.uid}.pose"
+            saved = journal["files"].get(record.uid)
+            if saved is not None and not target.is_file():
+                raise ValueError(f"Journaled extraction file is missing: {record.uid}")
+            if target.exists():
+                actual = file_identity(target)
+                expected = selected[record.uid]
+                if actual["bytes"] != expected["bytes"] or actual["crc32"] != expected["crc32"] or (
+                    saved is not None and any(actual[key] != saved[key] for key in actual)
+                ):
+                    raise ValueError(f"Existing extraction file is corrupt: {record.uid}")
+                journal["files"][record.uid] = {"uid": record.uid, "member": expected["member"], "path": str(target), **actual}
+                reused.append(record.uid)
+        write_json(journal_path, journal)
         first = selected[records[0].uid]
         if first["bytes"] > 512 * 1024**2:
             raise ValueError("Sample pose exceeds inspection memory bound")
-        sample = inspect_pose_bytes(archive.read(first["member"]), settings) if inspect_sample else None
-        written = []
-        for record in records:
+        if inspect_sample and journal["sample"] is None:
+            journal["sample"] = inspect_pose_bytes(archive.read(first["member"]), settings)
+            write_json(journal_path, journal)
+        for record in sorted(records, key=lambda r: selected[r.uid]["offset"]):
             target = output / f"{record.uid}.pose"
+            if record.uid in journal["files"]:
+                written.append(journal["files"][record.uid])
+                continue
+            count, crc, digest = 0, 0, hashlib.sha256()
             with archive.open(selected[record.uid]["member"]) as source, atomic_open(target) as stream:
-                shutil.copyfileobj(source, stream, length=1024 * 1024)
-            written.append({"uid": record.uid, "member": selected[record.uid]["member"],
-                            "path": str(target), "sha256": file_hash(target)})
-    report = {"parts": [str(path) for path in parts], "sample": sample, "files": written,
-              "archive_index": index, "layout": "flattened uid.pose; raw annotations unchanged"}
-    write_json(output / "extraction.json", report)
+                while block := source.read(1024 * 1024):
+                    stream.write(block)
+                    count += len(block)
+                    crc = zlib.crc32(block, crc)
+                    digest.update(block)
+                if count != selected[record.uid]["bytes"] or crc & 0xffffffff != selected[record.uid]["crc32"]:
+                    raise ValueError(f"Extracted member size/CRC mismatch: {record.uid}")
+            entry = {"uid": record.uid, "member": selected[record.uid]["member"], "path": str(target),
+                     "bytes": count, "crc32": crc & 0xffffffff, "sha256": digest.hexdigest()}
+            journal["files"][record.uid] = entry
+            write_json(journal_path, journal)
+            written.append(entry)
+        report = {"archive_identity": combined.identity, "sample": journal["sample"], "files": written,
+                  "selection_hash": binding["selection"], "reused_uids": reused, "archive_index": index,
+                  "layout": "flattened uid.pose; raw annotations unchanged", "complete": True}
+        write_json(output / "extraction.json", report)
     return report
 
 
@@ -174,6 +230,7 @@ def fetch_main(argv=None):
     parser.add_argument("--parts", action="store_true")
     parser.add_argument("--plan", action="store_true", help="Read archive index and print exact selected sizes; extract nothing")
     parser.add_argument("--fetch", action="store_true", help="Stream only selected remote members")
+    parser.add_argument("--resume", action="store_true", help="Verify and continue an extraction journal")
     parser.add_argument("--transport", choices=["range", "staged"], default="range")
     parser.add_argument("--staging-dir", default="data/raw/isign-staging")
     parser.add_argument("--dataset", choices=["target", "pretrain"], default="target")
@@ -215,7 +272,8 @@ def fetch_main(argv=None):
             print(json.dumps(plan, indent=2), flush=True)
             if args.plan:
                 return
-            report = extract_selected(parts, records, args.out, settings=config.features, max_bytes=args.max_bytes)
+            report = extract_selected(parts, records, args.out, settings=config.features, max_bytes=args.max_bytes,
+                                      resume=args.resume, selection_sha256=file_hash(args.manifest or args.uids_csv))
             report.update(selection_sha256=file_hash(args.manifest or args.uids_csv),
                           selection_kind="canonical-manifest" if args.manifest else "unaudited-annotation-UID-request",
                           plan=plan)

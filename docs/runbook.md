@@ -278,6 +278,8 @@ Replace ACTUAL_UID with an extracted UID. `--manifest` can replace `--uids-csv` 
 
 ## Measured training summaries and declared defaults
 
+Interrupted acquisition resumes with the same arguments plus `--resume`. `extraction.journal.json` binds the resolved archives, dataset revisions, request hash and UID/member selection. Each completed pose is atomically published and journaled with size, CRC and SHA256. Resume verifies existing bytes and refuses corruption or a changed selection. `extraction.json` is finalized only after full coverage. Keep selected raw poses for feature ablations; clean staged/archive copies only after coverage, cache verification and a deliberate backup decision. The implementation performs no uploads or raw-pose deletion.
+
 ```bash
 uv run --no-sync python scripts/summarize_run.py runs/baseline --output runs/baseline/training-summary.json
 ```

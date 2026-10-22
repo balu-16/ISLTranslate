@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -119,3 +120,32 @@ def test_archive_traversal_rejected():
     memory.seek(0)
     with zipfile.ZipFile(memory) as archive, pytest.raises(ValueError, match="Unsafe"):
         pose_index(archive)
+
+
+def test_interrupted_extraction_resumes_and_rejects_corruption(tmp_path, record_factory, monkeypatch):
+    from isl_slt.data import acquisition
+    archive = tmp_path / "local.zip"
+    with zipfile.ZipFile(archive, "w") as stream:
+        stream.writestr("one-1.pose", b"first")
+        stream.writestr("two-1.pose", b"second")
+    records = [record_factory("one-1"), record_factory("two-1")]
+    output = tmp_path / "out"
+    original = acquisition.write_json
+    def interrupt(path, value, *args, **kwargs):
+        original(path, value, *args, **kwargs)
+        if Path(path).name == "extraction.journal.json" and len(value["files"]) == 1:
+            raise KeyboardInterrupt()
+    monkeypatch.setattr(acquisition, "write_json", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        extract_selected([archive], records, output, inspect_sample=False)
+    assert not (output / "extraction.json").exists()
+    first_time = (output / "one-1.pose").stat().st_mtime_ns
+    monkeypatch.setattr(acquisition, "write_json", original)
+    report = extract_selected([archive], records, output, inspect_sample=False, resume=True)
+    assert report["reused_uids"] == ["one-1"]
+    assert (output / "one-1.pose").stat().st_mtime_ns == first_time
+    (output / "one-1.pose").write_bytes(b"bad!!")
+    with pytest.raises(ValueError, match="corrupt"):
+        extract_selected([archive], records, output, inspect_sample=False, resume=True)
+    with pytest.raises(ValueError, match="selection differs"):
+        extract_selected([archive], records[:1], output, inspect_sample=False, resume=True)

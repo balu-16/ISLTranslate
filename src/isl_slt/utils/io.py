@@ -13,6 +13,23 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
+@contextmanager
+def directory_lock(directory: str | Path, name: str = ".writer.lock"):
+    """Advisory POSIX ownership; never unlink the shared lock inode."""
+    import fcntl
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / name).open("a+b") as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise ValueError(f"Another writer owns {directory}") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
+
+
 def canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
                       allow_nan=False).encode("utf-8")
