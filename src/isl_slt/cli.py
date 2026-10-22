@@ -21,6 +21,9 @@ def parser() -> argparse.ArgumentParser:
         if name == "make-source-map":
             sub.add_argument("--out")
             sub.add_argument("--dataset", choices=["target", "pretrain"], default="target")
+            sub.add_argument("--promote", action="store_true")
+            sub.add_argument("--evidence")
+            sub.add_argument("--approve-def", action="store_true")
         if name == "audit":
             sub.add_argument("--allow-missing-poses", action="store_true", help="Write a draft envelope, never a frozen manifest")
         if name == "prepare-model":
@@ -85,7 +88,8 @@ def dispatch(args) -> dict | list:
         return prepare_stats(config)
     if command == "make-source-map":
         from isl_slt.workflows import make_source_map
-        return make_source_map(config, args.out, args.dataset)
+        return make_source_map(config, args.out, args.dataset, promote=args.promote,
+                               evidence=args.evidence, approve_def=args.approve_def)
     if command == "env-check":
         from isl_slt.utils.runtime import environment_report
         return environment_report(config.runtime)

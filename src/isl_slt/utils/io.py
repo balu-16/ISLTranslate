@@ -50,7 +50,7 @@ class HashSession:
 
 
 @contextmanager
-def atomic_open(path: str | Path, mode: str = "wb") -> Iterator:
+def atomic_open(path: str | Path, mode: str = "wb", *, replace: bool = True) -> Iterator:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -59,7 +59,11 @@ def atomic_open(path: str | Path, mode: str = "wb") -> Iterator:
             yield stream
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        if replace:
+            os.replace(temporary, path)
+        else:
+            # link publishes complete bytes atomically and refuses an existing destination.
+            os.link(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
 

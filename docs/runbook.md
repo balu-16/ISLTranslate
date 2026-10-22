@@ -112,6 +112,12 @@ uv run --no-sync python -m isl_slt make-source-map --config configs/transfer.yam
 
 Candidates remain unverified. Unresolved UIDs fail after report export. The command never overwrites an authoritative map. Exact duplicate rows are collapsed with kept/dropped row numbers and hashes; conflicting same-UID rows fail and raw annotations remain unchanged.
 
+After pinning the dataset revision and reviewing the [publisher's UID convention](https://huggingface.co/datasets/Exploration-Lab/iSign/blob/main/README.md), promote with recorded evidence. DEF identities require the separate approval shown here; omit it for sentence-only input. No existing authoritative mapping is overwritten:
+
+```bash
+uv run --no-sync python -m isl_slt make-source-map --config configs/baseline.yaml --promote --evidence "REPLACE with reviewed revision-specific naming and DEF evidence" --approve-def
+```
+
 ```bash
 uv run --no-sync python -m isl_slt audit --config configs/baseline.yaml
 uv run --no-sync python -m isl_slt split --config configs/baseline.yaml

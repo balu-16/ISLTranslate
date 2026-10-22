@@ -19,7 +19,8 @@ def planned_experiment(config: Config) -> dict:
             "numerical_validation": "not performed by planning"}
 
 
-def make_source_map(config: Config, output: str | None = None, dataset: str = "target") -> dict:
+def make_source_map(config: Config, output: str | None = None, dataset: str = "target", *,
+                    promote: bool = False, evidence: str | None = None, approve_def: bool = False) -> dict:
     import csv
     from collections import Counter
     from isl_slt.data.manifests import mapped_columns, read_csv, source_candidate
@@ -27,6 +28,17 @@ def make_source_map(config: Config, output: str | None = None, dataset: str = "t
     adapter = config.data.target if dataset == "target" else config.data.pretrain
     if adapter is None:
         raise ValueError("No pretrain adapter is configured")
+    if (evidence or approve_def) and not promote:
+        raise ValueError("--evidence and --approve-def require --promote")
+    if promote:
+        if not evidence or not evidence.strip():
+            raise ValueError("Promotion requires nonempty --evidence supporting source identities")
+        if adapter.dataset_revision.lower() in {"required", "main", "master", "latest", ""}:
+            raise ValueError("Pin the exact dataset revision before source promotion")
+        if not adapter.source_mapping:
+            raise ValueError("Configure the authoritative source_mapping destination")
+        if Path(adapter.source_mapping).exists():
+            raise ValueError("Promotion refuses to overwrite an existing source map")
     headers, raw = read_csv(adapter.annotations)
     columns = mapped_columns(headers, {"uid": adapter.columns["uid"]})
     destination = Path(output) if output else Path(adapter.source_mapping or f"data/metadata/{dataset}_source_mapping.csv").with_suffix(".candidates.csv")
@@ -34,7 +46,7 @@ def make_source_map(config: Config, output: str | None = None, dataset: str = "t
         adapter.source_mapping and destination.resolve() == Path(adapter.source_mapping).resolve()
     ):
         raise ValueError("Write candidates separately from raw annotations and authoritative source mappings")
-    rows, evidence, seen, unresolved = [], [], {}, []
+    rows, rules, seen, unresolved = [], [], {}, []
     for row in raw:
         uid = row[columns["uid"]]
         if uid in seen:
@@ -45,7 +57,7 @@ def make_source_map(config: Config, output: str | None = None, dataset: str = "t
         match, rule, pattern = source_candidate(uid, adapter.candidate_uid_pattern or adapter.candidate_uid_patterns)
         rows.append({"uid": uid, "source_id": match["source"] if match else "",
                      "verified": "false", "provenance": f"candidate:{rule}"})
-        evidence.append({"uid": uid, "rule": rule, "pattern": pattern})
+        rules.append({"uid": uid, "rule": rule, "pattern": pattern})
         if match is None:
             unresolved.append(uid)
     with atomic_open(destination, "w") as stream:
@@ -54,12 +66,30 @@ def make_source_map(config: Config, output: str | None = None, dataset: str = "t
         writer.writerows(rows)
     report = {"dataset": adapter.dataset_name, "revision": adapter.dataset_revision,
               "annotations_sha256": file_hash(adapter.annotations), "output": str(destination),
-              "count": len(rows), "rules": dict(Counter(row["rule"] for row in evidence)),
-              "candidates": evidence, "unresolved": unresolved,
+              "count": len(rows), "rules": dict(Counter(row["rule"] for row in rules)),
+              "candidates": rules, "unresolved": unresolved,
               "verification": "All rows remain unverified; review cross-dataset identity and record supporting evidence"}
     write_json(destination.with_suffix(".audit.json"), report)
     if unresolved:
         raise ValueError(f"Unresolved UIDs (candidate report saved): {unresolved}")
+    if promote:
+        if any(row["rule"] not in {"sentence-suffix", "def-tag"} for row in rules):
+            raise ValueError("Custom UID patterns require a separately reviewed authoritative map")
+        if any(row["rule"] == "def-tag" for row in rules) and not approve_def:
+            raise ValueError("DEF source identities require explicit --approve-def; no source map promoted")
+        provenance = {"evidence": evidence.strip(), "dataset": adapter.dataset_name,
+                      "dataset_revision": adapter.dataset_revision, "annotations_sha256": report["annotations_sha256"],
+                      "def_approved": approve_def, "basis": "explicitly approved dataset UID convention"}
+        import json
+        promoted = [{**row, "verified": "true", "provenance": json.dumps(
+            {**provenance, "rule": rule["rule"], "pattern": rule["pattern"]}, sort_keys=True)}
+            for row, rule in zip(rows, rules)]
+        with atomic_open(adapter.source_mapping, "w", replace=False) as stream:
+            writer = csv.DictWriter(stream, fieldnames=["uid", "source_id", "verified", "provenance"])
+            writer.writeheader()
+            writer.writerows(promoted)
+        report["promotion"] = {"destination": adapter.source_mapping, **provenance}
+        write_json(destination.with_suffix(".audit.json"), report)
     return report
 
 
