@@ -16,6 +16,50 @@ def planned_experiment(config: Config) -> dict:
             "numerical_validation": "not performed by planning"}
 
 
+def make_source_map(config: Config, output: str | None = None, dataset: str = "target") -> dict:
+    import csv
+    from collections import Counter
+    from isl_slt.data.manifests import mapped_columns, read_csv, source_candidate
+    from isl_slt.utils.io import atomic_open
+    adapter = config.data.target if dataset == "target" else config.data.pretrain
+    if adapter is None:
+        raise ValueError("No pretrain adapter is configured")
+    headers, raw = read_csv(adapter.annotations)
+    columns = mapped_columns(headers, {"uid": adapter.columns["uid"]})
+    destination = Path(output) if output else Path(adapter.source_mapping or f"data/metadata/{dataset}_source_mapping.csv").with_suffix(".candidates.csv")
+    if destination.resolve() == Path(adapter.annotations).resolve() or (
+        adapter.source_mapping and destination.resolve() == Path(adapter.source_mapping).resolve()
+    ):
+        raise ValueError("Write candidates separately from raw annotations and authoritative source mappings")
+    rows, evidence, seen, unresolved = [], [], {}, []
+    for row in raw:
+        uid = row[columns["uid"]]
+        if uid in seen:
+            if seen[uid] != row:
+                raise ValueError(f"Conflicting duplicate UID {uid!r}")
+            continue
+        seen[uid] = row
+        match, rule, pattern = source_candidate(uid, adapter.candidate_uid_pattern or adapter.candidate_uid_patterns)
+        rows.append({"uid": uid, "source_id": match["source"] if match else "",
+                     "verified": "false", "provenance": f"candidate:{rule}"})
+        evidence.append({"uid": uid, "rule": rule, "pattern": pattern})
+        if match is None:
+            unresolved.append(uid)
+    with atomic_open(destination, "w") as stream:
+        writer = csv.DictWriter(stream, fieldnames=["uid", "source_id", "verified", "provenance"])
+        writer.writeheader()
+        writer.writerows(rows)
+    report = {"dataset": adapter.dataset_name, "revision": adapter.dataset_revision,
+              "annotations_sha256": file_hash(adapter.annotations), "output": str(destination),
+              "count": len(rows), "rules": dict(Counter(row["rule"] for row in evidence)),
+              "candidates": evidence, "unresolved": unresolved,
+              "verification": "All rows remain unverified; review cross-dataset identity and record supporting evidence"}
+    write_json(destination.with_suffix(".audit.json"), report)
+    if unresolved:
+        raise ValueError(f"Unresolved UIDs (candidate report saved): {unresolved}")
+    return report
+
+
 def audit(config: Config) -> dict:
     from isl_slt.data.dataset import raw_sequence
     from isl_slt.data.manifests import adapt_csv, attach_interpreter, audit_records, save_manifest

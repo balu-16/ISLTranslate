@@ -13,7 +13,9 @@ data:
     pose_pattern: "{uid}.pose"
     video_pattern: "{uid}.mp4"
     source_mapping: data/metadata/source_mapping.csv
-    candidate_uid_pattern: '^(?P<source>.+)-(?P<sequence>\d+)$'
+    candidate_uid_patterns:
+      - '^(?P<source>.+)-(?P<sequence>\d+)$'
+      - '^(?P<source>[A-Za-z0-9_-]{11})_(?P<tag>(?:w|d|e\d+))$'
     metadata_csv: null
     corrections_jsonl: null
     coordinate_space: image_pixels

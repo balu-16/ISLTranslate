@@ -22,7 +22,11 @@ class Adapter(Strict):
     pose_pattern: str = "{uid}.pose"
     video_pattern: str = "{uid}.mp4"
     source_mapping: str | None = "data/metadata/source_mapping.csv"
-    candidate_uid_pattern: str = r"^(?P<source>.+)-(?P<sequence>\d+)$"
+    candidate_uid_patterns: list[str] = Field(default_factory=lambda: [
+        r"^(?P<source>.+)-(?P<sequence>\d+)$",
+        r"^(?P<source>[A-Za-z0-9_-]{11})_(?P<tag>(?:w|d|e\d+))$",
+    ])
+    candidate_uid_pattern: str | None = None  # Legacy saved configurations; prefer the ordered list.
     metadata_csv: str | None = None
     corrections_jsonl: str | None = None
     coordinate_space: Literal["image_pixels", "normalized_image"] = "image_pixels"
