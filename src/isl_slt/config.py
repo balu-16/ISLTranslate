@@ -48,12 +48,22 @@ class Data(Strict):
     rgb_dir: str = "artifacts/rgb"
     split_seed: int = 2026
     ratios: tuple[float, float, float] = (0.8, 0.1, 0.1)
-    protocol: Literal["source-held-out", "exploratory-unverified", "original-paper"] = "source-held-out"
+    protocol: Literal["source-held-out", "exploratory-unverified", "external-membership-gold-safe"] = "source-held-out"
     original_splits_csv: str | None = None
     workers: int = Field(default=0, ge=0)
     verify_assets: bool = False
     persistent_workers: bool = True
     pin_memory: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_protocol(cls, value):
+        if isinstance(value, dict) and value.get("protocol") == "original-paper":
+            import warnings
+            warnings.warn("original-paper is a legacy alias for external-membership-gold-safe; re-export splits to a new directory",
+                          DeprecationWarning, stacklevel=2)
+            return {**value, "protocol": "external-membership-gold-safe"}
+        return value
 
 
 class Features(Strict):
@@ -224,8 +234,8 @@ class Config(Strict):
             raise ValueError("Precomputed lexical supervision requires annotations")
         if self.lexical.method == "spacy" and self.lexical.weight and not self.lexical.spacy_model:
             raise ValueError("Specify a locally prepared spaCy model")
-        if self.data.protocol == "original-paper" and not self.data.original_splits_csv:
-            raise ValueError("Original-paper protocol requires exact externally supplied membership")
+        if self.data.protocol == "external-membership-gold-safe" and not self.data.original_splits_csv:
+            raise ValueError("External-membership protocol requires exact externally supplied membership")
         if "bertscore" in self.evaluation.metrics and not (
             self.evaluation.bertscore_model and self.evaluation.bertscore_revision
         ):

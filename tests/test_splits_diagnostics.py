@@ -3,6 +3,7 @@ import torch
 
 from isl_slt.config import Data
 from isl_slt.data.splits import assert_leakage_free, make_splits
+from isl_slt.data.splits import export_splits
 from isl_slt.evaluation.diagnostics import perturb_items
 
 
@@ -13,6 +14,14 @@ def test_source_leakage_and_pretraining_holdout_fail(record_factory):
         assert_leakage_free({"train": [first], "test": [second]})
     with pytest.raises(ValueError, match="Leakage"):
         assert_leakage_free({"pretrain": [first.model_copy(update={"split": "pretrain"})], "test": [second]})
+
+
+def test_external_membership_is_named_honestly(tmp_path, record_factory):
+    settings = Data(protocol="external-membership-gold-safe", split_dir=str(tmp_path / "split"))
+    records = {name: [record_factory(f"{name}-1", split=name)] for name in ("train", "validation", "test", "gold")}
+    metadata = export_splits(records, settings)
+    assert metadata["algorithm"] == "external-membership"
+    assert metadata["protocol"] == "external-membership-gold-safe"
 
 
 def test_splits_are_deterministic_and_reserve_whole_gold_parent(record_factory):
