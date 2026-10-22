@@ -116,6 +116,8 @@ Pose caches use non-pickle `.npz` arrays with JSON metadata under a preprocessin
 
 `prepare-model --allow-network` is the explicit model-download step. T5 assets are bound to repository, requested revision, resolved commit and file hashes in `asset.json`. The prepared generic initializer is distinct from task-specific trained checkpoints. Optional local spaCy, WordNet and BERTScore resources must be supplied explicitly.
 
+When BERTScore is requested, a command-scoped resource session hashes actual local model/config/tokenizer files once, checks immutable identities on reuse and reuses the scorer across subgroups/diagnostics. Asset hashes enter metric signatures and effective evaluation fingerprints; changing local bytes cannot preserve comparison identity merely by reusing a revision label. No semantic asset is obtained implicitly.
+
 See the [local storage layout](#local-storage-layout) for placement and the [runbook](runbook.md) for preparation commands.
 
 ## Run outputs and retention

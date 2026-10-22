@@ -4,7 +4,7 @@ import torch
 
 from isl_slt.config import Config
 from isl_slt.data.lexical import BPETokenizer
-from isl_slt.evaluation.metrics import score_predictions
+from isl_slt.evaluation.metrics import MetricResources, score_predictions
 from isl_slt.utils.runtime import autocast
 from isl_slt.utils.io import fingerprint
 
@@ -40,10 +40,11 @@ def generate_loader(model, tokenizer, loader, config: Config, device: torch.devi
     return rows
 
 
-def score_rows(rows: list[dict], config: Config, metrics: list[str] | None = None) -> dict:
+def score_rows(rows: list[dict], config: Config, metrics: list[str] | None = None, resources=None) -> dict:
+    resources = resources or MetricResources()
     result = score_predictions([row["prediction"] for row in rows], [row["references"] for row in rows],
                                metrics or config.evaluation.metrics, config.evaluation.bertscore_model,
-                               config.evaluation.bertscore_revision)
+                               config.evaluation.bertscore_revision, resources)
     result["truncated_count"] = sum(row["truncated"] for row in rows)
     result["by_clip_type"] = {}
     for clip_type in ("sentence", "def", "unknown"):
@@ -52,7 +53,7 @@ def score_rows(rows: list[dict], config: Config, metrics: list[str] | None = Non
                     "source_count": len({row["source_id"] for row in subset})}
         scores = score_predictions([row["prediction"] for row in subset], [row["references"] for row in subset],
             metrics or config.evaluation.metrics, config.evaluation.bertscore_model,
-            config.evaluation.bertscore_revision) if subset else {"scores": {}, "unavailable": {}, "status": "empty-subset"}
+            config.evaluation.bertscore_revision, resources) if subset else {"scores": {}, "unavailable": {}, "status": "empty-subset"}
         result["by_clip_type"][clip_type] = {**scores, **identity}
     gold = [row for row in rows if row.get("interpreter_reference") is not None]
     if gold:
@@ -63,11 +64,11 @@ def score_rows(rows: list[dict], config: Config, metrics: list[str] | None = Non
                     "source_count": len({row["source_id"] for row in gold})}
         result["transcript_on_gold_subset"] = score_predictions([row["prediction"] for row in gold],
             [row["references"] for row in gold], metrics or config.evaluation.metrics,
-            config.evaluation.bertscore_model, config.evaluation.bertscore_revision)
+            config.evaluation.bertscore_model, config.evaluation.bertscore_revision, resources)
         result["transcript_on_gold_subset"].update(identity)
         result["interpreter_diagnostic"] = score_predictions([row["prediction"] for row in gold],
             [[row["interpreter_reference"]] for row in gold], metrics or config.evaluation.metrics,
-            config.evaluation.bertscore_model, config.evaluation.bertscore_revision)
+            config.evaluation.bertscore_model, config.evaluation.bertscore_revision, resources)
         result["interpreter_diagnostic"].update(identity)
         result["gold_subset_identity"] = identity
     return result

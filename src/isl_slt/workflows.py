@@ -376,6 +376,7 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
     effective = {"generation": config.generation.model_dump(mode="json"), "selected_beams": beams,
                  "metrics": config.evaluation.metrics, "normalization": metric_report["normalization"],
                  "signatures": metric_report["signatures"],
+                 "resource_identities": metric_report.get("resource_identities", {}),
                  "bertscore_model": config.evaluation.bertscore_model,
                  "bertscore_revision": config.evaluation.bertscore_revision,
                  "precision": config.runtime.precision, "recurrent_fp32": config.runtime.recurrent_fp32,
@@ -408,6 +409,8 @@ def diagnostics(config: Config, checkpoint: str, partition: str, output: str, de
         raise ValueError("Paired diagnostics need at least two examples")
     donors = {order[i]: order[(i + 1) % len(order)] for i in range(len(order))}
     reports = {}
+    from isl_slt.evaluation.metrics import MetricResources
+    resources = MetricResources()
     for kind in ("real", "blank", "incorrect", "shuffle"):
         rows = []
         batches = LengthBuckets(dataset.lengths, config.training.micro_batch_size, config.training.max_frames_per_batch,
@@ -434,7 +437,7 @@ def diagnostics(config: Config, checkpoint: str, partition: str, output: str, de
                              "clip_type": record.clip_type,
                              "interpreter_reference": record.interpreter_text, "diagnostic": flag})
         write_jsonl(Path(output) / f"{kind}.jsonl", rows)
-        reports[kind] = score_rows(rows, config)
+        reports[kind] = score_rows(rows, config, resources=resources)
     result = {"paired_metrics": reports, "membership_hash": metadata["hashes"][partition],
               "seed": config.evaluation.diagnostic_seed,
               "interpretation": "Evidence of dependence on visual inputs; not standalone semantic-faithfulness proof"}

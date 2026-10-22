@@ -5,6 +5,7 @@ import pytest
 from isl_slt.evaluation.analysis import aggregate_runs
 from isl_slt.utils.io import fingerprint, write_json
 from isl_slt.evaluation.metrics import score_predictions
+from isl_slt.evaluation.metrics import MetricResources
 
 
 def test_case_variants_keep_corpus_fourgram_policy():
@@ -69,3 +70,25 @@ def test_clip_type_reports_preserve_primary_and_empty_subsets():
     assert report["by_clip_type"]["unknown"]["status"] == "empty-subset"
     assert report["by_clip_type"]["unknown"]["uid_count"] == 0
     assert report["by_clip_type"]["sentence"]["uid_hash"] != report["by_clip_type"]["def"]["uid_hash"]
+
+
+def test_semantic_asset_identity_hashes_once_and_detects_mutation(tmp_path, monkeypatch):
+    from isl_slt.utils import io
+    (tmp_path / "config.json").write_text('{"model_type": "fixture"}')
+    (tmp_path / "tokenizer.json").write_text('{"fixture": true}')
+    weights = tmp_path / "model.safetensors"
+    weights.write_bytes(b"synthetic bytes, not real model weights")
+    calls = []
+    original = io.file_hash
+    def counted(path):
+        calls.append(str(path))
+        return original(path)
+    monkeypatch.setattr(io, "file_hash", counted)
+    session = MetricResources()
+    first = session.model_identity(tmp_path, "same-declared-revision")
+    assert session.model_identity(tmp_path, "same-declared-revision") == first
+    assert len(calls) == 3
+    weights.write_bytes(b"changed resource bytes")
+    with pytest.raises(ValueError, match="changed during verification"):
+        session.model_identity(tmp_path, "same-declared-revision")
+    assert MetricResources().model_identity(tmp_path, "same-declared-revision")["assets_sha256"] != first["assets_sha256"]
