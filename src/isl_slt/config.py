@@ -141,6 +141,7 @@ class Training(Strict):
     max_target_epochs: int = Field(default=20, ge=1)
     early_stopping_patience: int = Field(default=3, ge=1)
     retain_epoch_checkpoints: int = Field(default=3, ge=0)
+    guarded_chrf_tolerance: float = Field(default=0.5, ge=0)
     pose_noise_std: float = Field(default=0, ge=0, le=0.02)
     overfit_uids: str | None = None
     stages: list[Stage] = Field(default_factory=lambda: [

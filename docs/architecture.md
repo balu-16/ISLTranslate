@@ -62,7 +62,7 @@ Manifests, caches and checkpoints use content fingerprints and atomic writes. Sp
 
 Trajectory checkpoints contain model, optimizer, scheduler, scaler, RNG states, stage/epoch/batch position, tokenizer bytes, resolved config, initialization provenance, package versions and backend information. Wall-time exits save at accumulation boundaries. Exact resume requires matching data, configuration, numerical policy and backend. Load checkpoint files only from trusted runs; full optimizer/RNG restoration uses local Python serialization.
 
-`last.pt` supports continuation; `best-bleu.pt` and `best-chrf.pt` serve distinct validation objectives. Checkpoint averaging accepts one compatible trajectory, checks nonfloating buffers and produces inference-only weights. Averaged weights require fresh validation decoding selection.
+`last.pt` supports continuation; `best-bleu.pt` and `best-chrf.pt` serve distinct validation objectives. `best-guarded.pt` requires a new historical BLEU-4 maximum and chrF++ no more than `training.guarded_chrf_tolerance` (default 0.5 percentage points) below the historical chrF++ maximum, evaluated before updating either maximum. Checkpoint averaging accepts one compatible trajectory, checks nonfloating buffers and produces inference-only weights. Averaged weights require fresh validation decoding selection.
 
 ## Package ownership
 

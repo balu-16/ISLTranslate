@@ -17,6 +17,7 @@ from isl_slt.evaluation.generation import select_decoding
 from isl_slt.losses.objectives import loss_for_window, window_denominators
 from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import bundle_tokenizer, compatibility, load_checkpoint, restore_tokenizer, save_checkpoint
+from isl_slt.training.checkpoint import guarded_improvement
 from isl_slt.utils.io import append_event, file_hash, read_json, versions, write_json, write_jsonl
 from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything
 
@@ -279,6 +280,8 @@ def run_training(config: Config, resume: str | None = None) -> dict:
             state["decoding_partition"] = "inspected-training-debug" if config.training.overfit_uids else "validation"
             bleu, chrf = metrics["scores"]["bleu4"], metrics["scores"]["chrf++"]
             improved_bleu, improved_chrf = bleu > state["best_bleu"], chrf > state["best_chrf"]
+            improved_guarded = guarded_improvement(bleu, chrf, state["best_bleu"], state["best_chrf"],
+                                                  config.training.guarded_chrf_tolerance)
             state["bad_epochs"] = 0 if improved_bleu else state["bad_epochs"] + 1
             state["best_bleu"], state["best_chrf"] = max(bleu, state["best_bleu"]), max(chrf, state["best_chrf"])
             state.update(global_epoch=state["global_epoch"] + 1, epoch_in_stage=epoch + 1, batch_offset=0)
@@ -293,6 +296,8 @@ def run_training(config: Config, resume: str | None = None) -> dict:
                 save(prefix + "best-bleu.pt")
             if improved_chrf:
                 save(prefix + "best-chrf.pt")
+            if improved_guarded:
+                save(prefix + "best-guarded.pt")
             save(f"epoch-{state['global_epoch']:04d}.pt")
             save("last.pt")
             retained = sorted((root / "checkpoints").glob("epoch-*.pt"))

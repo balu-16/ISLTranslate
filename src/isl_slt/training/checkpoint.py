@@ -1,6 +1,7 @@
 """Atomic, self-describing local checkpoints. Load only checkpoints from trusted local runs."""
 
 from pathlib import Path
+import math
 
 import torch
 
@@ -8,6 +9,12 @@ from isl_slt.config import Config
 from isl_slt.features.cache import preprocessing_fingerprint
 from isl_slt.utils.io import atomic_open, file_hash, fingerprint
 from isl_slt.features.statistics import load_statistics
+
+
+def guarded_improvement(bleu, chrf, best_bleu, best_chrf, tolerance=0.5) -> bool:
+    """New historical BLEU maximum with chrF within tolerance of historical chrF maximum."""
+    return all(math.isfinite(value) for value in (bleu, chrf, best_bleu, best_chrf, tolerance)) and (
+        tolerance >= 0 and bleu > best_bleu and chrf >= best_chrf - tolerance)
 
 
 def bundle_tokenizer(directory: str | Path) -> dict[str, bytes]:
