@@ -63,12 +63,12 @@ def make_source_map(config: Config, output: str | None = None, dataset: str = "t
     return report
 
 
-def audit(config: Config) -> dict:
+def audit(config: Config, allow_missing_poses: bool = False) -> dict:
     from isl_slt.data.dataset import raw_sequence
     from isl_slt.data.manifests import adapt_csv, attach_interpreter, audit_records, save_manifest
     from isl_slt.data.pose import read_pose
     from isl_slt.features.pose import prepare_pose
-    reports = {}
+    reports, pending, failures = {}, [], []
     for kind, adapter, destination in (("target", config.data.target, config.data.manifest),
                                        ("pretrain", config.data.pretrain, config.data.pretrain_manifest)):
         if adapter is None:
@@ -117,9 +117,36 @@ def audit(config: Config) -> dict:
                 except (ValueError, OSError) as error:
                     context_errors.append({"uid": record.uid, "error": str(error)})
             report["context_errors"] = context_errors
-        save_manifest(destination, records)
+        errors = {
+            "missing_pose": report["missing_pose"],
+            "invalid_pose": [row for row in pose_audits if "error" in row],
+            "invalid_targets": report["invalid_targets"],
+            "rgb_unavailable": report.get("rgb_unavailable", []),
+            "context_errors": report.get("context_errors", []),
+        }
+        report["errors"] = {name: rows for name, rows in errors.items() if rows}
+        report["status"] = "draft" if allow_missing_poses else "failed" if report["errors"] else "validated"
         write_json(Path(destination).with_suffix(".audit.json"), report)
         reports[kind] = report
+        pending.append((destination, records))
+        if report["errors"]:
+            failures.append(kind)
+    if allow_missing_poses:
+        for destination, records in pending:
+            draft = Path(destination).with_suffix(".draft.json")
+            write_json(draft, {"format": "isl-slt-draft-v1", "frozen": False,
+                              "records": [r.model_dump(mode="json") for r in records]})
+        return reports
+    if failures:
+        raise ValueError(f"Audit failed for {failures}; inspect .audit.json reports. No manifests were frozen. "
+                         "Use --allow-missing-poses only for a non-training draft.")
+    # Preflight existing destinations before publishing any member of a multi-dataset audit.
+    from isl_slt.data.manifests import load_manifest, manifest_hash
+    for destination, records in pending:
+        if Path(destination).exists() and manifest_hash(load_manifest(destination)) != manifest_hash(records):
+            raise ValueError(f"Refusing to replace immutable manifest: {destination}; use a new revision/path")
+    for destination, records in pending:
+        save_manifest(destination, records)
     return reports
 
 

@@ -238,7 +238,10 @@ def attach_interpreter(records: list[Record], path: str, aliases: dict[str, list
 
 
 def load_manifest(path: str | Path) -> list[Record]:
-    return [Record.model_validate(row) for row in read_jsonl(path)]
+    rows = read_jsonl(path)
+    if any(row.get("format") == "isl-slt-draft-v1" or row.get("frozen") is False for row in rows):
+        raise ValueError("Draft manifests cannot be used for splitting, features, training or evaluation; audit real poses first")
+    return [Record.model_validate(row) for row in rows]
 
 
 def save_manifest(path: str | Path, records: list[Record], immutable: bool = True) -> None:

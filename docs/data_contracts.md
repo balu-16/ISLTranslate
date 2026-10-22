@@ -88,6 +88,8 @@ RGB additionally requires actual videos, synchronized frame times and an explici
 
 ## Audit and immutable manifests
 
+Audit validates all requested datasets before freezing any manifest. Missing/invalid required poses or requested context/RGB inputs fail after writing diagnostic reports. `audit --allow-missing-poses` instead writes a replaceable `.draft.json` envelope; production manifest loaders reject it. Supply the real poses and rerun ordinary audit to freeze `.jsonl` records with checksums.
+
 Audit creates canonical JSONL manifests and adjacent `.audit.json` reports. Each record includes dataset/annotation revisions, original paths, source provenance, label, optional interpreter references and relevant metadata. Existing pose/video/timestamp bytes are hashed, and pose/video SHA256 fingerprints contribute to exact duplicate checks.
 
 Audit reports expose duplicate/conflicting UIDs, empty labels, missing assets, repeated texts, source-verification coverage, interpreter conflicts, pose issues and requested context/RGB availability. Review the reports before training. A written report is not evidence that every reported issue is acceptable. Repeated text alone is not a content duplicate and remains in the dataset.
