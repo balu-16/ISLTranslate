@@ -26,7 +26,8 @@ def audit(config: Config) -> dict:
                                        ("pretrain", config.data.pretrain, config.data.pretrain_manifest)):
         if adapter is None:
             continue
-        records = adapt_csv(adapter)
+        adapter_audit = {}
+        records = adapt_csv(adapter, adapter_audit)
         if kind == "target" and config.data.interpreter_csv:
             records = attach_interpreter(records, config.data.interpreter_csv, config.data.interpreter_columns)
         locked = []
@@ -40,7 +41,7 @@ def audit(config: Config) -> dict:
                 f"{name}-file-sha256:{value}" for name, value in hashes.items() if name in ("pose", "video")})
             locked.append(record.model_copy(update={"asset_hashes": hashes, "duplicate_fingerprints": duplicates}))
         records = locked
-        report = audit_records(records)
+        report = {**audit_records(records), **adapter_audit}
         pose_audits = []
         for record in records:
             if not Path(record.pose_path).is_file():

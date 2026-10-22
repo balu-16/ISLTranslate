@@ -4,6 +4,24 @@ import pytest
 
 from isl_slt.config import Data
 from isl_slt.data.manifests import attach_interpreter, mapped_columns
+from isl_slt.config import Adapter
+from isl_slt.data.manifests import adapt_csv
+
+
+def test_exact_duplicate_audit_and_conflicts(tmp_path):
+    path = tmp_path / "annotations.csv"
+    original = "uid,text\nsame-1, leading text\nsame-1, leading text\nother-1, leading text\n"
+    path.write_text(original)
+    adapter = Adapter(annotations=str(path), dataset_revision="synthetic", source_mapping=None)
+    audit = {}
+    records = adapt_csv(adapter, audit)
+    assert len(records) == 2
+    assert records[0].text == " leading text"
+    assert audit["collapsed_exact_duplicates"][0]["dropped_row"] == 3
+    assert path.read_text() == original
+    path.write_text("uid,text\nsame-1, leading text\nsame-1,leading text\n")
+    with pytest.raises(ValueError, match="Conflicting duplicate"):
+        adapt_csv(adapter)
 
 
 def test_real_gold_headers(tmp_path, record_factory):

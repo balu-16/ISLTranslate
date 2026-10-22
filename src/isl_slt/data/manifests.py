@@ -164,16 +164,30 @@ def _metadata(path: str | None) -> dict[str, dict]:
     return result
 
 
-def adapt_csv(adapter: Adapter) -> list[Record]:
+def adapt_csv(adapter: Adapter, audit: dict | None = None) -> list[Record]:
     if adapter.dataset_revision == "REQUIRED":
         raise ValueError("Set the exact dataset revision before creating a manifest")
     headers, rows = read_csv(adapter.annotations)
     columns = mapped_columns(headers, adapter.columns)
     if not {"uid", "text"}.issubset(columns):
         raise ValueError("Adapter must explicitly map uid and text")
+    unique, seen, collapsed = [], {}, []
+    for line_number, raw in enumerate(rows, start=2):
+        uid = raw[columns["uid"]]
+        if uid in seen:
+            previous, kept_line = seen[uid]
+            if previous != raw:
+                raise ValueError(f"Conflicting duplicate UID {uid!r} at CSV rows {kept_line}, {line_number}")
+            collapsed.append({"uid": uid, "kept_row": kept_line, "dropped_row": line_number,
+                              "raw_row_sha256": fingerprint(raw)})
+        else:
+            seen[uid] = (raw, line_number)
+            unique.append(raw)
+    if audit is not None:
+        audit["collapsed_exact_duplicates"] = collapsed
     overrides, metadata = source_mapping(adapter.source_mapping), _metadata(adapter.metadata_csv)
     records = []
-    for raw in rows:
+    for raw in unique:
         values = {key: raw[column] for key, column in columns.items()}
         uid = values["uid"]
         values = {**resolve_source(uid, overrides, adapter.candidate_uid_pattern),

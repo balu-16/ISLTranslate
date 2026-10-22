@@ -7,3 +7,4 @@ Corrections applied to the proposed plan: candidate source mappings require evid
 | Task | Implemented decision and deferred acceptance |
 | --- | --- |
 | P0-1 | Full public gold headers plus short aliases; ambiguous aliases still fail. Offline three-row attachment/ambiguity tests written, not run. |
+| P0-2 | Collapse only byte-equivalent parsed CSV rows with the same UID; preserve whitespace/raw CSV and distinct UIDs. Audit kept/dropped row numbers and row hashes; conflicting duplicates fail. Tests written, not run. |
