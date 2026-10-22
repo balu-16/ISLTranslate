@@ -16,8 +16,12 @@ def aggregate_runs(paths: list[str]) -> dict:
     reports = [read_json(path) for path in paths]
     if not reports:
         raise ValueError("No completed evaluation reports supplied")
+    from isl_slt.utils.io import fingerprint
+    if any("effective_evaluation" not in report or
+           report.get("evaluation_fingerprint") != fingerprint(report["effective_evaluation"]) for report in reports):
+        raise ValueError("Evaluation reports need valid effective-evaluation fingerprints; regenerate legacy reports")
     protocols = {(report["partition"], report["membership_hash"], report["comparison_fingerprint"],
-                  report["metrics"]["normalization"], report["metrics"]["signatures"].get("bleu4")) for report in reports}
+                  report["evaluation_fingerprint"]) for report in reports}
     if len(protocols) != 1 or len({r["seed"] for r in reports}) != len(reports):
         raise ValueError("Seed aggregation requires unique seeds, identical splits/protocols and experiment settings")
     metric_names = set(reports[0]["metrics"]["scores"])

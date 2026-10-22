@@ -241,14 +241,14 @@ def evaluation_inputs(config: Config, checkpoint: str, partition: str):
     return predictor, dataset, metadata
 
 
-def comparison_fingerprint(predictor) -> str:
+def comparison_fingerprint(predictor, effective_evaluation: dict) -> str:
     config = predictor.config
     training = config.training.model_dump(mode="json")
     training.pop("seed")
     return fingerprint({"model": config.model.model_dump(mode="json"), "training": training,
                         "features": predictor.checkpoint["compatibility"]["feature_schema"],
                         "rgb": config.rgb.model_dump(mode="json"), "lexical": config.lexical.model_dump(mode="json"),
-                        "generation": config.generation.model_dump(mode="json"),
+                        "evaluation": effective_evaluation,
                         "rgb_initializer": predictor.checkpoint.get("rgb_initializer"),
                         "initializer": predictor.checkpoint["initializer"]})
 
@@ -281,10 +281,18 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
             beams = predictor.beams
         rows = generate_loader(predictor.model, predictor.tokenizer, loader, config, predictor.device, beams)
     write_jsonl(Path(output) / "predictions.jsonl", rows)
+    metric_report = score_rows(rows, config)
+    effective = {"generation": config.generation.model_dump(mode="json"), "selected_beams": beams,
+                 "metrics": config.evaluation.metrics, "normalization": metric_report["normalization"],
+                 "signatures": metric_report["signatures"],
+                 "bertscore_model": config.evaluation.bertscore_model,
+                 "bertscore_revision": config.evaluation.bertscore_revision,
+                 "precision": config.runtime.precision, "recurrent_fp32": config.runtime.recurrent_fp32}
     report = {"partition": partition, "membership_hash": metadata["hashes"][partition],
               "protocol": metadata["protocol"], "seed": predictor.config.training.seed,
-              "comparison_fingerprint": comparison_fingerprint(predictor), "selected_beams": beams,
-              "checkpoint_sha256": checkpoint_sha, "metrics": score_rows(rows, config),
+              "comparison_fingerprint": comparison_fingerprint(predictor, effective), "selected_beams": beams,
+              "effective_evaluation": effective, "evaluation_fingerprint": fingerprint(effective),
+              "checkpoint_sha256": checkpoint_sha, "metrics": metric_report,
               "runtime": config.runtime.model_dump(mode="json"),
               "context_lookahead_seconds": config.context.next_seconds if config.context.enabled else 0,
               "parameter_counts": predictor.checkpoint["parameter_counts"]}
