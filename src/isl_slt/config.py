@@ -154,7 +154,8 @@ class Training(Strict):
     gradient_clip_norm: float = Field(default=1, gt=0)
     max_target_epochs: int = Field(default=20, ge=1)
     early_stopping_patience: int = Field(default=3, ge=1)
-    retain_epoch_checkpoints: int = Field(default=3, ge=0)
+    retain_epoch_checkpoints: int = Field(default=0, ge=0)
+    inference_snapshot_dtype: Literal["native", "bf16"] = "native"
     guarded_chrf_tolerance: float = Field(default=0.5, ge=0)
     pose_noise_std: float = Field(default=0, ge=0, le=0.02)
     overfit_uids: str | None = None

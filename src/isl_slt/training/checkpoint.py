@@ -2,6 +2,10 @@
 
 from pathlib import Path
 import math
+import errno
+import os
+import shutil
+import uuid
 
 import torch
 
@@ -87,6 +91,40 @@ def inference_payload(payload: dict) -> dict:
     return {key: value for key, value in payload.items()
             if key not in {"optimizer", "scheduler", "scaler", "rng"}} | {
                 "inference_only": True, "checkpoint_kind": "inference"}
+
+
+def publish_snapshots(paths, payload, dtype="native") -> dict:
+    """Serialize once per epoch, then atomically replace aliases without changing older links."""
+    paths = [Path(path) for path in paths]
+    if not paths:
+        return {}
+    snapshot = inference_payload(payload)
+    snapshot["snapshot_precision"] = {"storage": dtype, "lossy_conversion": dtype == "bf16",
+                                      "compute_precision": "configured at inference"}
+    if dtype == "bf16":
+        snapshot["model"] = {name: tensor.detach().to(dtype=torch.bfloat16) if tensor.is_floating_point() else tensor
+                             for name, tensor in snapshot["model"].items()}
+        snapshot["state"] = {**snapshot["state"], "selected_beams": None, "decoding_partition": None}
+    elif dtype != "native":
+        raise ValueError("Inference snapshot dtype must be native or bf16")
+    save_checkpoint(paths[0], snapshot)
+    modes = {str(paths[0]): "serialized"}
+    for target in paths[1:]:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}")
+        try:
+            try:
+                os.link(paths[0], temporary)
+                modes[str(target)] = "hardlink"
+            except OSError as error:
+                if error.errno not in {errno.EXDEV, errno.EPERM, errno.EACCES, errno.ENOSYS, errno.EOPNOTSUPP}:
+                    raise
+                shutil.copyfile(paths[0], temporary)
+                modes[str(target)] = "copy-fallback"
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return modes
 
 
 def load_checkpoint(path: str | Path, expected: dict | None = None) -> dict:

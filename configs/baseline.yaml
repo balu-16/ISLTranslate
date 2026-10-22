@@ -102,7 +102,8 @@ training:
   gradient_clip_norm: 1.0
   max_target_epochs: 20
   early_stopping_patience: 3
-  retain_epoch_checkpoints: 3
+  retain_epoch_checkpoints: 0
+  inference_snapshot_dtype: native
   guarded_chrf_tolerance: 0.5
   pose_noise_std: 0
   overfit_uids: null

@@ -216,6 +216,8 @@ The seed override places outputs under `seed-<seed>`. Summaries require distinct
 
 Only average at least two retained compatible checkpoints from the same trajectory. The glob below uses actual retained epoch files, not assumed epoch numbers:
 
+Epoch retention defaults to zero. Before a trajectory intended for averaging, explicitly set `training.retain_epoch_checkpoints` to at least 2 in its config; this cannot recover discarded epochs afterward.
+
 ```bash
 uv run --no-sync python -m isl_slt average --checkpoints runs/baseline/checkpoints/epoch-*.pt --output runs/baseline/checkpoints/averaged.pt
 uv run --no-sync --env-file .env python -m isl_slt evaluate --config configs/baseline.yaml --checkpoint runs/baseline/checkpoints/averaged.pt --partition validation --output runs/baseline/averaged/validation

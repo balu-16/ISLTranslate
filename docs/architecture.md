@@ -58,6 +58,8 @@ Configuration details and prerequisites are in [experiments](experiments.md).
 
 ## Reproducibility and checkpointing
 
+Epoch retention defaults to zero; epoch files are written only when explicitly requested for averaging. Same-epoch best snapshots share one serialized inode through atomic hard links, with a logged copy fallback on unsupported filesystems. `training.inference_snapshot_dtype: bf16` is an optional lossy storage conversion of inference weights only; it clears decoding and requires fresh validation selection. Native storage remains default and `last.pt` always keeps full training precision/state. Exclusive run ownership protects checkpoint cleanup and removes stale `.last.pt.*` files before continuation.
+
 Manifests, caches and checkpoints use content fingerprints and atomic writes. Split membership is immutable. Checkpoint compatibility includes architecture, tokenizer, feature schema, cache artifacts, split hashes, lexicon, RGB initializer and numerical policy. Prepared text assets record a resolved model revision and file checksums.
 
 Continuation checkpoints (`last.pt`) contain model, optimizer, scheduler, scaler, RNG states, stage/epoch/batch position, tokenizer bytes, resolved config, initialization provenance, package versions and backend information. Wall-time exits save at accumulation boundaries. Exact resume requires matching data, configuration, numerical policy and backend. Load checkpoint files only from trusted runs; full optimizer/RNG restoration uses local Python serialization.

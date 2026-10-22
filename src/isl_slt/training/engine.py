@@ -18,8 +18,8 @@ from isl_slt.evaluation.generation import select_decoding
 from isl_slt.losses.objectives import loss_for_window, window_denominators
 from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import bundle_tokenizer, compatibility, load_checkpoint, restore_tokenizer, save_checkpoint
-from isl_slt.training.checkpoint import guarded_improvement, inference_payload, validate_resume_compatibility
-from isl_slt.utils.io import append_event, file_hash, read_json, versions, write_json, write_jsonl
+from isl_slt.training.checkpoint import guarded_improvement, inference_payload, publish_snapshots, validate_resume_compatibility
+from isl_slt.utils.io import append_event, directory_lock, file_hash, read_json, versions, write_json, write_jsonl
 from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything, synchronize
 
 
@@ -143,6 +143,14 @@ def update_window(model, optimizer, scheduler, scaler, batches, config: Config, 
 def run_training(config: Config, resume: str | None = None, allow_code_change: bool = False) -> dict:
     if config.training.debug_only and not config.training.overfit_uids:
         raise ValueError("Debug-only training requires overfit --uids with 32–64 inspected training UIDs")
+    with directory_lock(config.run_dir):
+        for temporary in (Path(config.run_dir) / "checkpoints").glob(".last.pt.*"):
+            if temporary.is_file() and not temporary.is_symlink():
+                temporary.unlink()
+        return _run_training(config, resume, allow_code_change)
+
+
+def _run_training(config: Config, resume: str | None = None, allow_code_change: bool = False) -> dict:
     partitions, split_metadata = checked_splits(config.data)
     context_partitions = dict(partitions)
     partitions = dict(partitions)
@@ -245,7 +253,7 @@ def run_training(config: Config, resume: str | None = None, allow_code_change: b
         restored.get("initializer") if restored else {"type": "training-only-BPE"})
     package_versions = versions()
 
-    def save(name: str):
+    def payload():
         payload = {"format": "isl-slt-checkpoint-v1", "run_id": run_id, "inference_only": False,
             "checkpoint_kind": "resume",
             "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
@@ -259,7 +267,10 @@ def run_training(config: Config, resume: str | None = None, allow_code_change: b
             "rgb_initializer": rgb_initializer,
             "parameter_counts": {"total": sum(p.numel() for p in model.parameters()),
                                  "trainable": sum(p.numel() for p in model.parameters() if p.requires_grad)}}
-        save_checkpoint(root / "checkpoints" / name, payload if name == "last.pt" else inference_payload(payload))
+        return payload
+
+    def save(name: str):
+        save_checkpoint(root / "checkpoints" / name, payload())
 
     for stage_index in range(state["stage_index"], len(config.training.stages)):
         stage = config.training.stages[stage_index]
@@ -340,13 +351,14 @@ def run_training(config: Config, resume: str | None = None, allow_code_change: b
             append_event(root / "events.jsonl", kind="epoch", stage=stage.name, epoch=state["global_epoch"],
                          train_seconds=state["epoch_train_seconds"], validation_seconds=validation_seconds)
             state["epoch_train_seconds"] = 0.0
-            if improved_bleu:
-                save(prefix + "best-bleu.pt")
-            if improved_chrf:
-                save(prefix + "best-chrf.pt")
-            if improved_guarded:
-                save(prefix + "best-guarded.pt")
-            save(f"epoch-{state['global_epoch']:04d}.pt")
+            names = [prefix + name for improved, name in (
+                (improved_bleu, "best-bleu.pt"), (improved_chrf, "best-chrf.pt"),
+                (improved_guarded, "best-guarded.pt")) if improved]
+            if config.training.retain_epoch_checkpoints:
+                names.append(f"epoch-{state['global_epoch']:04d}.pt")
+            modes = publish_snapshots([root / "checkpoints" / name for name in names], payload(),
+                                      config.training.inference_snapshot_dtype) if names else {}
+            append_event(root / "events.jsonl", kind="checkpoint_storage", epoch=state["global_epoch"], modes=modes)
             save("last.pt")
             retained = sorted((root / "checkpoints").glob("epoch-*.pt"))
             keep = config.training.retain_epoch_checkpoints
