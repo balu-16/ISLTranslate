@@ -4,6 +4,15 @@ import pytest
 
 from isl_slt.evaluation.analysis import aggregate_runs
 from isl_slt.utils.io import fingerprint, write_json
+from isl_slt.evaluation.metrics import score_predictions
+
+
+def test_case_variants_keep_corpus_fourgram_policy():
+    report = score_predictions(["Hello bright world today"], [["hello bright world today"]], ["bleu", "chrf"])
+    assert report["scores"]["bleu4_lc"] == pytest.approx(100)
+    assert report["scores"]["bleu4"] < 100
+    assert report["scores"]["chrf++_lc"] == pytest.approx(100)
+    assert report["signatures"]["bleu4"] != report["signatures"]["bleu4_lc"]
 
 
 def test_effective_generation_mismatch_cannot_aggregate(tmp_path):
