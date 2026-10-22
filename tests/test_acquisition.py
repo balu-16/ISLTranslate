@@ -93,6 +93,8 @@ def test_pretraining_plan_excludes_all_target_sources_and_budgets_groups(tmp_pat
     assert {r.uid for r in rows} == {"allowed-1", "allowed-2"}
     assert report["compressed_bytes"] == 20
     assert {r["reason"] for r in report["excluded"]} == {"target_parent", "duplicate_normalized_text"}
+    with pytest.raises(ValueError, match="authoritative target"):
+        plan_selection([archive], pool, target_records=[], budget_bytes=20)
 
 
 def test_split_zip_selective_extraction(tmp_path, record_factory):
@@ -149,3 +151,16 @@ def test_interrupted_extraction_resumes_and_rejects_corruption(tmp_path, record_
         extract_selected([archive], records, output, inspect_sample=False, resume=True)
     with pytest.raises(ValueError, match="selection differs"):
         extract_selected([archive], records[:1], output, inspect_sample=False, resume=True)
+
+
+def test_staging_cleans_only_owned_stale_files_after_lock(tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    stale = staging / ("a" * 64 + ".part")
+    partial = staging / ("." + "b" * 64 + ".part.interrupted")
+    keep = staging / "user-notes.txt"
+    for path in (stale, partial, keep):
+        path.write_bytes(b"existing")
+    with StagedParts([], [], staging):
+        assert not stale.exists() and not partial.exists()
+        assert keep.exists()

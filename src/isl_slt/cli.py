@@ -104,7 +104,7 @@ def dispatch(args) -> dict | list:
     if command == "audit":
         from isl_slt.workflows import audit
         return audit(config, args.allow_missing_poses)
-    if command in ("audit", "split", "prepare-features", "prepare-rgb"):
+    if command in ("split", "prepare-features", "prepare-rgb"):
         from isl_slt import workflows
         return getattr(workflows, command.replace("-", "_"))(config)
     if command == "check-leakage":

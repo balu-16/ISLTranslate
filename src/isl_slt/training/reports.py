@@ -44,6 +44,8 @@ def summarize_run(directory) -> dict:
         stage["examples_per_second"] = stage["examples"] / stage["train_seconds"] if complete and stage["train_seconds"] else None
         stage["frames_per_second"] = stage["frames"] / stage["train_seconds"] if complete and stage["train_seconds"] else None
         stage["validation_seconds_per_epoch"] = stage["validation_seconds"] / stage["completed_epochs"]
+    checkpoints = sorted((root / "checkpoints").rglob("*.pt"))
+    unique_files = {(path.stat().st_dev, path.stat().st_ino): path.stat().st_size for path in checkpoints}
     return {"run_dir": str(root), "successful_updates": updates, "consumed_examples": examples,
             "consumed_frames": frames, "completed_epochs": epochs, "update_seconds": update_seconds,
             "train_seconds": train_seconds, "validation_seconds": validation_seconds,
@@ -52,8 +54,9 @@ def summarize_run(directory) -> dict:
             "validation_seconds_per_epoch": validation_seconds / epochs if epochs else None,
             "peak_gpu_memory_bytes": peak,
             "stages": stages,
+            "unique_checkpoint_bytes": sum(unique_files.values()),
             "checkpoint_sizes": {str(path.relative_to(root)): path.stat().st_size
-                                 for path in sorted((root / "checkpoints").rglob("*.pt"))},
+                                 for path in checkpoints},
             "measurement_scope": "Update throughput excludes input-window loading; epoch train time includes it. Setup/checkpoint I/O is excluded."}
 
 

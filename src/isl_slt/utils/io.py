@@ -81,6 +81,12 @@ def atomic_open(path: str | Path, mode: str = "wb", *, replace: bool = True) -> 
         else:
             # link publishes complete bytes atomically and refuses an existing destination.
             os.link(temporary, path)
+        if os.name == "posix":
+            parent = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
     finally:
         Path(temporary).unlink(missing_ok=True)
 

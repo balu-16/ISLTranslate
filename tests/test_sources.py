@@ -67,3 +67,15 @@ def test_source_promotion_requires_evidence_and_pinned_revision(tmp_path):
         make_source_map(config, promote=True)
     with pytest.raises(ValueError, match="revision"):
         make_source_map(config, promote=True, evidence="publisher naming")
+
+
+def test_custom_pattern_is_not_promoted_by_reusing_rule_group_names(tmp_path):
+    config = Config()
+    config.data.target.annotations = str(tmp_path / "input.csv")
+    config.data.target.source_mapping = str(tmp_path / "authoritative.csv")
+    config.data.target.dataset_revision = "fixture-v1"
+    config.data.target.candidate_uid_pattern = r"^(?P<source>.+)_(?P<sequence>\d+)$"
+    (tmp_path / "input.csv").write_text("uid,text\ncustom_1,text\n")
+    with pytest.raises(ValueError, match="Custom UID patterns"):
+        make_source_map(config, promote=True, evidence="custom evidence")
+    assert not (tmp_path / "authoritative.csv").exists()

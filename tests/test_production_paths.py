@@ -37,6 +37,19 @@ def test_interpolation_anchor_and_velocity_boundaries():
     assert np.count_nonzero(velocity[2]) == 0
 
 
+def test_missing_anchor_frame_keeps_positions_but_blocks_velocity():
+    from types import SimpleNamespace
+    coordinates = np.zeros((3, 48, 3), np.float32)
+    coordinates[:, 0, 0], coordinates[:, 1, 0] = -1, 1
+    valid = np.ones_like(coordinates, bool)
+    valid[1, :2] = False
+    sequence = SimpleNamespace(coordinates=coordinates, valid=valid, names=selected_joints(Features()),
+        times=np.array([0., .04, .08]), segments=np.zeros(3, int), regions=np.zeros(3, int), metadata={})
+    prepared = prepare_pose(sequence, Features())
+    assert prepared.position_valid[:, 6].all()
+    assert not prepared.velocity_valid[1:, 6].any()
+
+
 class LinearTranslator(torch.nn.Module):
     def __init__(self):
         super().__init__()

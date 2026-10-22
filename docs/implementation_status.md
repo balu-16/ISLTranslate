@@ -100,3 +100,5 @@ The earlier reviewer-reported tests/resume/split checks do not satisfy acceptanc
 | 16–17 | Window-indexed context dependencies and actual BERTScore asset identities | Implementation/static review in this round; runtime validation pending |
 
 Static acceptance checks syntax, local references, notebook structure/preview defaults and whitespace without importing the project. Future checks are in the runbook; no passing result is asserted for this revised branch.
+
+Implementation choice: remote Hub metadata resolves the immutable archive identity, while a small HTTP reader checks exact `206`/`Content-Range` responses before consuming payloads. This prevents a filesystem adapter from silently buffering a complete part when ranges are ignored. `ArchivePart` still accepts HfFileSystem-compatible seekable openers. POSIX advisory locks protect extraction/staging/run writers. Selected raw poses are retained; all network, tests and hardware checks remain future opt-ins.

@@ -3,11 +3,13 @@
 import bisect
 from collections import OrderedDict
 from dataclasses import dataclass
+from collections.abc import Callable
 import hashlib
 import io
 from pathlib import Path
 import re
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.error import HTTPError
 
 from isl_slt.utils.io import atomic_open
 
@@ -28,7 +30,7 @@ class ArchivePart:
     name: str
     size: int
     identity: dict
-    open: object
+    open: Callable[[], io.IOBase]
 
 
 def local_part(path) -> ArchivePart:
@@ -42,6 +44,7 @@ def local_part(path) -> ArchivePart:
 class RangeFile(io.RawIOBase):
     """Read exactly the requested range; reject HTTP 200 before reading any full body."""
     def __init__(self, url, size, token=None, opener=None):
+        super().__init__()
         self.url, self.size, self.position = url, size, 0
         self.token, self.opener = token, opener or build_opener(SafeRedirect())
         self.transferred = 0
@@ -70,7 +73,11 @@ class RangeFile(io.RawIOBase):
         headers = {"Range": f"bytes={start}-{end}", "Accept-Encoding": "identity"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        with self.opener.open(Request(self.url, headers=headers), timeout=60) as response:
+        try:
+            response = self.opener.open(Request(self.url, headers=headers), timeout=60)
+        except HTTPError as error:
+            raise OSError(f"Remote archive range request failed with HTTP {error.code}; check access/revision") from None
+        with response:
             if response.status != 206 or response.headers.get("Content-Range") != f"bytes {start}-{end}/{self.size}":
                 raise OSError("Remote server did not honor exact byte ranges; explicitly choose --transport staged")
             data = response.read(size + 1)
@@ -98,6 +105,10 @@ class StagedParts:
         except OSError:
             self.lock.close()
             raise ValueError("Staging directory is already in use") from None
+        # Remove only names owned by this transport after taking exclusive ownership.
+        for path in self.directory.iterdir():
+            if re.fullmatch(r"(?:[0-9a-f]{64}\.part|\.[0-9a-f]{64}\.part\..+)", path.name) and path.is_file():
+                path.unlink()
         return self
 
     def ensure(self, number):
@@ -117,7 +128,11 @@ class StagedParts:
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         count, digest = 0, hashlib.sha256()
-        with self.opener.open(Request(self.urls[number], headers=headers), timeout=60) as response:
+        try:
+            response = self.opener.open(Request(self.urls[number], headers=headers), timeout=60)
+        except HTTPError as error:
+            raise OSError(f"Staged archive request failed with HTTP {error.code}; check access/revision") from None
+        with response:
             with atomic_open(path) as stream:
                 while block := response.read(min(1024 * 1024, part.size - count + 1)):
                     count += len(block)
@@ -135,6 +150,7 @@ class StagedParts:
         owner = self
         class StagedFile(RangeFile):
             def __init__(self):
+                io.RawIOBase.__init__(self)
                 self.size, self.position = owner.parts[number].size, 0
             def read(self, size=-1):
                 with owner.ensure(number).open("rb") as stream:

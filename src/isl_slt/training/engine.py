@@ -164,6 +164,8 @@ def run_training(config: Config, resume: str | None = None, allow_code_change: b
                  allow_environment_change: bool = False) -> dict:
     if config.training.debug_only and not config.training.overfit_uids:
         raise ValueError("Debug-only training requires overfit --uids with 32–64 inspected training UIDs")
+    if not resume and (allow_code_change or allow_environment_change):
+        raise ValueError("Code/environment transition overrides apply only with --resume")
     with directory_lock(config.run_dir):
         for temporary in (Path(config.run_dir) / "checkpoints").glob(".last.pt.*"):
             if temporary.is_file() and not temporary.is_symlink():

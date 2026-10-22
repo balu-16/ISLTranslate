@@ -114,8 +114,17 @@ def publish_snapshots(paths, payload, dtype="native") -> dict:
     snapshot["snapshot_precision"] = {"storage": dtype, "lossy_conversion": dtype == "bf16",
                                       "compute_precision": "configured at inference"}
     if dtype == "bf16":
-        snapshot["model"] = {name: tensor.detach().to(dtype=torch.bfloat16) if tensor.is_floating_point() else tensor
-                             for name, tensor in snapshot["model"].items()}
+        converted, weights = {}, {}
+        for name, tensor in snapshot["model"].items():
+            if tensor.is_floating_point():
+                key = (tensor.untyped_storage().data_ptr(), tensor.storage_offset(), tuple(tensor.shape),
+                       tuple(tensor.stride()), tensor.dtype, tensor.device)
+                if key not in converted:
+                    converted[key] = tensor.detach().to(dtype=torch.bfloat16)
+                weights[name] = converted[key]
+            else:
+                weights[name] = tensor
+        snapshot["model"] = weights
         snapshot["state"] = {**snapshot["state"], "selected_beams": None, "decoding_partition": None}
     elif dtype != "native":
         raise ValueError("Inference snapshot dtype must be native or bf16")

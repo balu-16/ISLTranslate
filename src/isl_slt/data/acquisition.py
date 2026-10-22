@@ -65,7 +65,10 @@ def plan_selection(parts, records, *, target_records=None, budget_bytes=None, se
         from isl_slt.data.splits import pretraining_candidates
         if budget_bytes is None or budget_bytes <= 0:
             raise ValueError("Pretraining selection requires an explicit positive --budget-bytes")
-        records, excluded = pretraining_candidates(records, list(target_records))
+        target_records = list(target_records)
+        if not target_records or any(not r.source_id or not r.source_verified for r in target_records):
+            raise ValueError("Pretraining planning requires complete authoritative target source exclusions")
+        records, excluded = pretraining_candidates(records, target_records)
     with MultipartReader(parts) as combined, zipfile.ZipFile(combined) as archive:
         index = pose_index(archive)
         missing = [r.uid for r in records if r.uid not in index]
@@ -124,7 +127,7 @@ def remote_parts(repo, revision, token=None):
         row = files[name]
         url = hf_hub_url(repo, name, repo_type="dataset", revision=info.sha)
         lfs = row.lfs
-        sha = getattr(lfs, "sha256", None) if lfs is not None else None
+        sha = lfs.get("sha256") if isinstance(lfs, dict) else getattr(lfs, "sha256", None)
         identity = {"repository": repo, "revision": info.sha, "name": name, "size": row.size,
                     "blob_id": row.blob_id, "sha256": sha}
         parts.append(ArchivePart(name, row.size, identity, lambda url=url, size=row.size: RangeFile(url, size, token)))
@@ -175,6 +178,8 @@ def extract_selected(parts, records, output, *, settings=None, max_bytes=50 * 10
         written, reused = [], []
         for record in records:
             target = output / f"{record.uid}.pose"
+            if target.is_symlink():
+                raise ValueError(f"Extraction destination must not be a symlink: {record.uid}")
             saved = journal["files"].get(record.uid)
             if saved is not None and not target.is_file():
                 raise ValueError(f"Journaled extraction file is missing: {record.uid}")
@@ -243,6 +248,10 @@ def fetch_main(argv=None):
     parser.add_argument("--config", default="configs/baseline.yaml")
     parser.add_argument("--max-bytes", type=int, default=50 * 1024**3)
     args = parser.parse_args(argv)
+    if args.resume and (args.plan or not (args.archives or args.fetch)):
+        parser.error("--resume applies only to explicit local extraction or remote --fetch")
+    if (args.plan or args.fetch or args.archives) and (args.list or args.csv or args.parts):
+        parser.error("Selection planning/fetching cannot be combined with bulk/listing flags")
     if args.archives or args.plan or args.fetch:
         if bool(args.manifest) == bool(args.uids_csv):
             parser.error("Selection requires exactly one of --manifest or --uids-csv")

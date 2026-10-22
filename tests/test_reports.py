@@ -29,3 +29,15 @@ def test_completed_epoch_rate_uses_loading_and_ignores_partial_epoch(tmp_path):
     result = dispatch(parser().parse_args(["estimate", "--examples", "100", "--epochs", "2",
                                            "--run-summary", str(summary), "--stage", "joint"]))
     assert result["estimated_hours"] == 2 * (100 / 5 + 3) / 3600
+
+
+def test_checkpoint_summary_counts_hardlinked_bytes_once(tmp_path):
+    import os
+    append_event(tmp_path / "events.jsonl", kind="setup")
+    directory = tmp_path / "checkpoints"
+    directory.mkdir()
+    (directory / "best-bleu.pt").write_bytes(b"one snapshot")
+    os.link(directory / "best-bleu.pt", directory / "best-chrf.pt")
+    report = summarize_run(tmp_path)
+    assert report["unique_checkpoint_bytes"] == len(b"one snapshot")
+    assert len(report["checkpoint_sizes"]) == 2

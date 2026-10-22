@@ -67,8 +67,40 @@ def test_identical_best_snapshots_share_disk_and_replacement_is_independent(tmp_
     payload["model"] = {"weight": torch.tensor([2.0])}
     publish_snapshots(paths[:1], payload)
     assert load_checkpoint(paths[1])["model"]["weight"].item() == 1.0
+    payload["model"]["tied_weight"] = payload["model"]["weight"]
     publish_snapshots([tmp_path / "bf16.pt"], payload, "bf16")
     saved = load_checkpoint(tmp_path / "bf16.pt")
     assert saved["model"]["weight"].dtype == torch.bfloat16
     assert saved["snapshot_precision"]["lossy_conversion"]
     assert saved["state"]["selected_beams"] is None
+    assert saved["model"]["weight"].data_ptr() == saved["model"]["tied_weight"].data_ptr()
+
+
+def test_snapshot_copy_fallback_is_recorded(tmp_path, monkeypatch):
+    import errno
+    def no_links(*args):
+        raise OSError(errno.EXDEV, "synthetic cross-device destination")
+    monkeypatch.setattr("isl_slt.training.checkpoint.os.link", no_links)
+    payload = {"model": {"weight": torch.tensor([1.0])}, "state": {}}
+    paths = [tmp_path / "first.pt", tmp_path / "second.pt"]
+    modes = publish_snapshots(paths, payload)
+    assert modes[str(paths[1])] == "copy-fallback"
+    assert paths[0].read_bytes() == paths[1].read_bytes()
+
+
+def test_run_ownership_protects_stale_checkpoint_cleanup(tmp_path, monkeypatch):
+    from isl_slt.config import Config
+    from isl_slt.training import engine
+    from isl_slt.utils.io import directory_lock
+    config = Config(run_dir=str(tmp_path))
+    checkpoints = tmp_path / "checkpoints"
+    checkpoints.mkdir()
+    stale = checkpoints / ".last.pt.stale"
+    stale.write_bytes(b"interrupted atomic checkpoint")
+    monkeypatch.setattr(engine, "_run_training", lambda *args: {"status": "test-double"})
+    with directory_lock(tmp_path):
+        with pytest.raises(ValueError, match="Another writer"):
+            engine.run_training(config)
+        assert stale.exists()
+    assert engine.run_training(config)["status"] == "test-double"
+    assert not stale.exists()

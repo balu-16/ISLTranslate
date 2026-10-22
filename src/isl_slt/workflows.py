@@ -33,7 +33,7 @@ def make_source_map(config: Config, output: str | None = None, dataset: str = "t
     if promote:
         if not evidence or not evidence.strip():
             raise ValueError("Promotion requires nonempty --evidence supporting source identities")
-        if adapter.dataset_revision.lower() in {"required", "main", "master", "latest", ""}:
+        if adapter.dataset_revision.strip().lower() in {"required", "main", "master", "latest", "head", "", "unverified-extraction-request"}:
             raise ValueError("Pin the exact dataset revision before source promotion")
         if not adapter.source_mapping:
             raise ValueError("Configure the authoritative source_mapping destination")
@@ -73,7 +73,9 @@ def make_source_map(config: Config, output: str | None = None, dataset: str = "t
     if unresolved:
         raise ValueError(f"Unresolved UIDs (candidate report saved): {unresolved}")
     if promote:
-        if any(row["rule"] not in {"sentence-suffix", "def-tag"} for row in rules):
+        from isl_slt.config import Adapter
+        allowed_patterns = set(Adapter().candidate_uid_patterns)
+        if any(row["rule"] not in {"sentence-suffix", "def-tag"} or row["pattern"] not in allowed_patterns for row in rules):
             raise ValueError("Custom UID patterns require a separately reviewed authoritative map")
         if any(row["rule"] == "def-tag" for row in rules) and not approve_def:
             raise ValueError("DEF source identities require explicit --approve-def; no source map promoted")
@@ -112,7 +114,7 @@ def audit(config: Config, allow_missing_poses: bool = False) -> dict:
             hashes = {name: file_hash(path) for name, path in {
                 "pose": record.pose_path, "video": record.video_path, "timestamps": record.timestamps_path
             }.items() if path and Path(path).is_file()}
-            if any(hashes.get(name) != value for name, value in record.asset_hashes.items()):
+            if any(hashes[name] != value for name, value in record.asset_hashes.items() if name in hashes):
                 raise ValueError(f"{record.uid}: supplied asset checksums conflict with local files")
             duplicates = sorted(set(record.duplicate_fingerprints) | {
                 f"{name}-file-sha256:{value}" for name, value in hashes.items() if name in ("pose", "video")})
@@ -126,7 +128,7 @@ def audit(config: Config, allow_missing_poses: bool = False) -> dict:
                 continue
             try:
                 sequence = read_pose(record, config.features)
-                prepared = prepare_pose(sequence, config.features)
+                prepared = prepare_pose(sequence, config.features, config.context.enabled)
                 pose_audits.append({"uid": record.uid, "frames": len(sequence.times), "fps": sequence.metadata["fps"],
                     "missing_selected_landmarks": int((~prepared.observed).sum()),
                     "total_selected_landmarks": prepared.observed.size, "components": sequence.metadata["components"],
@@ -377,6 +379,7 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
                  "metrics": config.evaluation.metrics, "normalization": metric_report["normalization"],
                  "signatures": metric_report["signatures"],
                  "resource_identities": metric_report.get("resource_identities", {}),
+                 "snapshot_precision": predictor.checkpoint.get("snapshot_precision", {"storage": "native"}),
                  "bertscore_model": config.evaluation.bertscore_model,
                  "bertscore_revision": config.evaluation.bertscore_revision,
                  "precision": config.runtime.precision, "recurrent_fp32": config.runtime.recurrent_fp32,

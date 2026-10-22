@@ -19,6 +19,8 @@ def test_strict_workspace_policy(monkeypatch):
         assert torch.is_deterministic_algorithms_warn_only_enabled()
     finally:
         torch.use_deterministic_algorithms(enabled, warn_only=warn)
+
+
 def test_environment_probe_includes_local_t5_and_configured_precision():
     from isl_slt.config import Runtime
     from isl_slt.utils.runtime import environment_report
@@ -28,5 +30,3 @@ def test_environment_probe_includes_local_t5_and_configured_precision():
     assert report["t5_probes"]["fp32"]["pretrained_weights"] is False
     assert report["configured_precision_ok"]
     assert not report["t5_probes"]["fp16"]["ok"]
-
-
