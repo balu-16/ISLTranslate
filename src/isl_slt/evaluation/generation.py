@@ -63,9 +63,9 @@ def score_rows(rows: list[dict], config: Config, metrics: list[str] | None = Non
     return result
 
 
-def select_decoding(model, tokenizer, loader, config: Config, device: torch.device):
+def select_decoding(model, tokenizer, loader, config: Config, device: torch.device, candidate_beams=None):
     candidates = []
-    for beams in sorted(set(config.generation.beams)):
+    for beams in sorted(set(config.generation.beams if candidate_beams is None else candidate_beams)):
         rows = generate_loader(model, tokenizer, loader, config, device, beams)
         score = score_rows(rows, config, ["bleu", "chrf"])
         candidates.append((beams, score, rows))

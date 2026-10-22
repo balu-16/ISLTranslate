@@ -153,6 +153,7 @@ class Training(Strict):
 
 
 class Generation(Strict):
+    train_beams: list[int] = Field(default_factory=lambda: [1])
     beams: list[int] = Field(default_factory=lambda: [1, 4])
     length_penalty: float = Field(default=1, gt=0)
     max_new_tokens: int = Field(default=128, ge=1)
@@ -199,7 +200,9 @@ class Config(Strict):
             raise ValueError("CNN channel widths must be positive")
         if abs(sum(self.data.ratios) - 1) > 1e-8 or min(self.data.ratios) <= 0:
             raise ValueError("Split ratios must be positive and sum to one")
-        if not self.generation.beams or any(n < 1 for n in self.generation.beams):
+        if not self.generation.beams or not self.generation.train_beams or any(
+            n < 1 for n in [*self.generation.beams, *self.generation.train_beams]
+        ):
             raise ValueError("Generation beams must be positive")
         stages = self.training.stages
         if len({s.name for s in stages}) != len(stages):

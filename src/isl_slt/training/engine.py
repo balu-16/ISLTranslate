@@ -283,8 +283,10 @@ def run_training(config: Config, resume: str | None = None) -> dict:
                 save("last.pt")
                 return {"status": "wall_time_limit", "state": state, "run_dir": str(root)}
             validation_loader, _ = loader_for(validation, tokenizer, config, training=False)
-            (beams, metrics, rows), candidate_scores = select_decoding(model, tokenizer, validation_loader, config, device)
+            (beams, metrics, rows), candidate_scores = select_decoding(
+                model, tokenizer, validation_loader, config, device, config.generation.train_beams)
             state["selected_beams"] = beams
+            state["decoding_policy"] = "training-validation"
             state["decoding_partition"] = "inspected-training-debug" if config.training.overfit_uids else "validation"
             bleu, chrf = metrics["scores"]["bleu4"], metrics["scores"]["chrf++"]
             improved_bleu, improved_chrf = bleu > state["best_bleu"], chrf > state["best_chrf"]

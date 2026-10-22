@@ -292,6 +292,10 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
                 raise ValueError("Decoding selection must match this checkpoint, validation split and generation settings")
             beams = selection["selected_beams"]
         else:
+            if predictor.checkpoint["state"].get("decoding_policy") == "training-validation" and (
+                set(predictor.config.generation.train_beams) != set(config.generation.beams)
+            ):
+                raise ValueError("Run the final validation beam sweep and supply --decoding before test/gold")
             if (config.generation.model_dump() != predictor.config.generation.model_dump() or predictor.beams is None
                 or predictor.checkpoint["state"]["decoding_partition"] != "validation"):
                 raise ValueError("Run validation decoding selection first and supply --decoding")

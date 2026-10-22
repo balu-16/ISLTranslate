@@ -15,6 +15,21 @@ def test_case_variants_keep_corpus_fourgram_policy():
     assert report["signatures"]["bleu4"] != report["signatures"]["bleu4_lc"]
 
 
+def test_training_beam_candidates_are_explicit(monkeypatch):
+    config = Config()
+    called = []
+    def generated(model, tokenizer, loader, config, device, beams):
+        called.append(beams)
+        return []
+    monkeypatch.setattr(generation, "generate_loader", generated)
+    monkeypatch.setattr(generation, "score_rows", lambda *args: {"scores": {"bleu4": 0, "chrf++": 0}})
+    generation.select_decoding(None, None, [], config, None, config.generation.train_beams)
+    assert called == [1]
+    called.clear()
+    generation.select_decoding(None, None, [], config, None)
+    assert called == [1, 4]
+
+
 def test_effective_generation_mismatch_cannot_aggregate(tmp_path):
     paths = []
     for seed, maximum in [(13, 64), (42, 128)]:
