@@ -23,7 +23,7 @@ def dependencies_for(record: Record, records: list[Record], config: Config) -> l
     if not config.context.enabled:
         return [record]
     index = records if isinstance(records, SourceIndex) else SourceIndex(records)
-    return index.dependencies(record)
+    return index.dependencies(record, config.context)
 
 
 def raw_sequence(record: Record, records: list[Record], config: Config):

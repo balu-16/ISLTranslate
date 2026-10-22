@@ -86,6 +86,8 @@ Image-normalized XY is converted using verified positive pose-header width and h
 
 Context requires verified parent identity, verified timing, compatible pose metadata and real coverage of the requested previous/following time windows. Context is assembled only from the same immutable partition. Source duration distinguishes a true recording endpoint from missing coverage. Unknown gaps fail by default; enabling `allow_gaps` is an explicit protocol choice.
 
+Audits/datasets build one source/partition interval index and query overlapping windows. Context dependencies bind only those clips, with source identity stored once per cache. The `overlapping-window-v2` context fingerprint requires regenerating earlier context caches; the pose-only v2 fingerprint is unchanged. Index pruning is tested by operation counts, not unmeasured timing claims.
+
 RGB additionally requires actual videos, synchronized frame times and an explicit pose-to-video affine transform. An identity matrix is valid only after confirming the geometries agree. Crop validity is retained; hand mode can use an upper-body fallback. Missing or stale RGB assets fail an RGB experiment, while pose-only operation does not need videos.
 
 ## Audit and immutable manifests

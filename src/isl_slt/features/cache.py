@@ -13,8 +13,11 @@ CACHE_VERSION = "pose-feature-cache-v2"
 
 
 def preprocessing_fingerprint(config: Config) -> str:
-    return fingerprint({"version": CACHE_VERSION, "features": config.features.model_dump(mode="json"),
-                        "context": config.context.model_dump(mode="json")})
+    identity = {"version": CACHE_VERSION, "features": config.features.model_dump(mode="json"),
+                "context": config.context.model_dump(mode="json")}
+    if config.context.enabled:
+        identity["context_dependencies"] = "overlapping-window-v2"
+    return fingerprint(identity)
 
 
 def record_signature(record: Record, verify_assets: bool = True, hashes=None) -> dict:
@@ -58,12 +61,24 @@ class SignatureSession:
         return self.records[key]
 
 
+def dependency_bundle(config, record, dependencies, session, verify_assets=True):
+    signatures = [dict(session.signature(row, verify_assets)) for row in sorted(dependencies, key=lambda r: r.key)]
+    bundle = {"dependencies": signatures}
+    if config.context.enabled:
+        if any(row.source_id != record.source_id or row.split != record.split for row in dependencies):
+            raise ValueError("Context dependency source/partition mismatch")
+        bundle["context_source"] = {"source": record.source_id, "partition": record.split}
+        for signature in signatures:
+            signature.pop("source")
+    return bundle
+
+
 def write_features(config: Config, record: Record, prepared: Prepared, dependencies: list[Record], signatures=None) -> dict:
     signatures = signatures or SignatureSession()
     arrays_path, metadata_path = cache_paths(config, record)
     metadata = {"version": CACHE_VERSION, "preprocessing": preprocessing_fingerprint(config),
                 "record_key": record.key, "uid": record.uid, "source_revision": record.dataset_revision,
-                "dependencies": [signatures.signature(row) for row in sorted(dependencies, key=lambda r: r.key)],
+                **dependency_bundle(config, record, dependencies, signatures),
                 "frames": len(prepared.times), "writer_versions": versions(), **prepared.metadata}
     with atomic_open(arrays_path) as stream:
         np.savez_compressed(stream, values=prepared.values, times=prepared.times, observed=prepared.observed,
@@ -84,8 +99,8 @@ def read_features(config: Config, record: Record, dependencies: list[Record] | N
         raise ValueError(f"{record.uid}: cache identity or array checksum mismatch")
     candidates = dependencies if dependencies is not None else [record]
     session = signatures or SignatureSession()
-    expected = [session.signature(row, verify_assets) for row in sorted(candidates, key=lambda r: r.key)]
-    if expected != metadata["dependencies"]:
+    expected = dependency_bundle(config, record, candidates, session, verify_assets)
+    if any(value != metadata.get(key) for key, value in expected.items()):
         raise ValueError(f"{record.uid}: manifest/source metadata changed; regenerate features")
     with np.load(arrays_path, allow_pickle=False) as arrays:
         return Prepared(**{name: arrays[name].copy() for name in (

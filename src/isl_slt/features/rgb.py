@@ -66,7 +66,9 @@ def load_crops(center: Record, source_records: list[Record], sequence: PoseSeque
     views = 3 if config.rgb.hand_crops else 1
     images = np.zeros((len(sequence.times), views, config.rgb.crop_size, config.rgb.crop_size, 3), np.uint8)
     masks = np.zeros((len(sequence.times), views), bool)
-    relevant = [r for r in source_records if r.source_id == center.source_id and r.split == center.split]
+    from isl_slt.data.context import SourceIndex
+    indexed = source_records if isinstance(source_records, SourceIndex) else SourceIndex(source_records)
+    relevant = indexed.dependencies(center, config.context) if config.context.enabled else [center]
     if not config.context.enabled:
         relevant = [center]
     owners = []
@@ -162,9 +164,13 @@ def rgb_signature(config: Config, center: Record, dependencies: list[Record],
         video_hash = signatures.hashes.hash(record.video_path) if verify_assets else record.asset_hashes["video"]
         if record.asset_hashes.get("video", video_hash) != video_hash:
             raise ValueError(f"{record.uid}: video bytes changed since immutable manifest creation")
-        dependency_signatures.append({**signatures.signature(record, verify_assets), "video_sha256": video_hash,
-                                      "image_transform": record.image_transform})
-    return {"version": "rgb-cache-v1", "pose_preprocessing": preprocessing_fingerprint(config),
+        signature = dict(signatures.signature(record, verify_assets))
+        if config.context.enabled:
+            signature.pop("source")
+        dependency_signatures.append({**signature, "video_sha256": video_hash, "image_transform": record.image_transform})
+    return {"version": "rgb-context-cache-v2" if config.context.enabled else "rgb-cache-v1",
+            **({"context_source": {"source": center.source_id, "partition": center.split}} if config.context.enabled else {}),
+            "pose_preprocessing": preprocessing_fingerprint(config),
             "settings": config.rgb.model_dump(mode="json"),
             "weights_sha256": signatures.hashes.hash(config.rgb.weights_path) if verify_assets else weights_sha256,
             "center": center.key, "dependencies": dependency_signatures}

@@ -141,9 +141,10 @@ def audit(config: Config, allow_missing_poses: bool = False) -> dict:
                 not Path(record.video_path).is_file() or record.image_transform is None]
         if config.context.enabled:
             context_errors = []
+            indexed = SourceIndex(records)
             for record in records:
                 try:
-                    raw_sequence(record, records, config)
+                    raw_sequence(record, indexed, config)
                 except (ValueError, OSError) as error:
                     context_errors.append({"uid": record.uid, "error": str(error)})
             report["context_errors"] = context_errors
