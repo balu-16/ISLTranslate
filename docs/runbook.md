@@ -17,7 +17,8 @@ Install uv separately, then resolve dependencies and select exactly one backend.
 ```bash
 uv lock
 uv sync --locked --extra cpu --extra dev
-uv run --no-sync pytest
+uv run --no-sync pytest -m "not slow"
+uv run --no-sync pytest -m slow
 # Create .env from .env.example only if it does not already exist.
 ```
 

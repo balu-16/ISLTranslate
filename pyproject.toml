@@ -29,6 +29,7 @@ dev = ["pytest>=8,<9"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+markers = ["slow: offline synthetic CLI integration with locally initialized tiny models"]
 
 [project.scripts]
 isl-slt = "isl_slt.cli:main"
