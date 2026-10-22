@@ -4,7 +4,7 @@ All commands here are for the future execution phase and have not been run. They
 
 ## 1. Supply inputs and configure paths
 
-Read the [data contracts](data_contracts.md) and [data directory guide](../data/README.md). Supply annotations, matching pose files, verified parent-source mappings, the interpreter table and exact dataset revisions. Verify actual CSV headers instead of assuming the defaults match an export.
+Read the [data contracts and local storage layout](data_contracts.md#local-storage-layout). Supply annotations, matching pose files, verified parent-source mappings, the interpreter table and exact dataset revisions. Verify actual CSV headers instead of assuming the defaults match an export.
 
 Set paths, revisions, column mappings, coordinate conventions and any metadata in the baseline before auditing. Distinct experiments inherit these settings. Local machine overrides can use an ignored `configs/*.local.yaml` file with `extends: baseline.yaml`; preserve the resolved config for every actual run.
 
@@ -12,7 +12,7 @@ When context or RGB will be evaluated, include its required timing/geometry meta
 
 ## 2. Prepare an environment
 
-Install uv separately, then resolve dependencies and select exactly one backend. This CPU example is suitable for an initial environment; use the [AMD guide](amd_setup.md) for the intended ROCm host.
+Install uv separately, then resolve dependencies and select exactly one backend. The offline CPU acceptance setup is:
 
 ```bash
 uv lock
@@ -22,6 +22,30 @@ uv run --no-sync pytest
 ```
 
 Populate local credentials/resource paths as needed. No lockfile was fabricated during implementation. Subsequent commands use `--no-sync` so they do not implicitly install or change dependencies. One optional runner notebook and an offline CPU pytest suite are available. Tests have not been run and their duration remains unmeasured.
+
+### AMD and backend selection
+
+`pyproject.toml` declares mutually exclusive `cpu`, `rocm` and `cuda` extras, using explicit torch/torchvision indexes with suffixes `cpu`, `rocm7.2` and `cu130`. These are proposed choices with compatibility still unverified. Before resolution, check the intended host's GPU architecture, OS, driver/ROCm version and supported wheel pair; adjust the dependency declaration deliberately if needed and retain the real lockfile.
+
+After `uv lock`, choose the AMD environment with:
+
+```bash
+uv sync --locked --extra rocm
+```
+
+Use `--extra cpu` or `--extra cuda` for the other declared backends. Do not combine backend extras or use `--all-extras`. Include all needed optional extras in the same sync: `rgb` for video access, `lexical` for spaCy, `semantic` for BERTScore, `notebooks` for JupyterLab/ipykernel, and `dev` for pytest. The baseline CLI and regex lexical path need none of those optional resources.
+
+On ROCm, PyTorch uses the `torch.cuda` API; `runtime.device: cuda` requires the GPU, while `auto` can fall back to CPU. Reports expose `torch.version.hip`. The baseline stays FP32 with `recurrent_fp32: true`; packed recurrence stays outside autocast even in mixed-precision experiments. The explicit probe in step 3 reports FP32/BF16/FP16 forward/backward results and backend information. Successful probing precedes any precision change and does not establish full model correctness. BF16 support is checked; FP16 is unsupported on CPU and uses scaling on GPU.
+
+`runtime.determinism_mode: strict` remains default. `warn` is an explicit debugging mode. NVIDIA workspace setup occurs before CUDA use; HIP workspace/recurrent behavior needs its own host checks. Keep measured backend/package inventory, seed, resolved configuration and lockfile together. Precision, batch/frame limits or resampling changes require a named experiment and fresh run directory; do not change a resumed trajectory to bypass compatibility checks. A wall-time budget saves at accumulation boundaries and does not allocate hardware.
+
+References: [uv PyTorch integration](https://docs.astral.sh/uv/guides/integration/pytorch/) and [PyTorch HIP semantics](https://docs.pytorch.org/docs/stable/notes/hip.html).
+
+### Credentials and local assets
+
+Create private `.env` from `.env.example` only if it does not already exist. Set `HF_TOKEN` there or in the process environment; the template also declares `HF_HOME`, `NLTK_DATA` and tokenizer parallelism. Credentials stay out of YAML, notebook outputs, checkpoints and logs.
+
+Add `--env-file .env` to commands needing these settings. Ordinary model loading uses local assets. Only explicit `prepare-model --allow-network` obtains project model weights; dataset acquisition and optional language resources have separate preparation commands below. See [local storage layout](data_contracts.md#local-storage-layout) for placement.
 
 ## Notebook workflow
 
@@ -41,7 +65,7 @@ Select the project's `.venv` interpreter. In VS Code, use **Select Kernel → Py
 uv run --no-sync python -m ipykernel install --user --name isl-slt --display-name "ISL SLT (uv)"
 ```
 
-The notebook resolves the repository from the root or `notebooks/` working directory. The default uv mode requires the project kernel; `RUNNER="managed"` validates the host Python/packages/backend instead. See [managed setup](colab.md). Change `CONFIG_PATH` in its configuration cell; derived run/checkpoint/output paths follow the selected config. An optional seed override mirrors the CLI's `seed-<seed>` directory convention.
+The notebook resolves the repository from the root or `notebooks/` working directory. The default uv mode requires the project kernel; `RUNNER="managed"` validates the host Python/packages/backend instead. See [managed setup](#managed-colabkaggle-setup). Change `CONFIG_PATH` in its configuration cell; derived run/checkpoint/output paths follow the selected config. An optional seed override mirrors the CLI's `seed-<seed>` directory convention.
 
 Every CLI cell starts with `execute=False` and only prints its argument list as a readable command. Set it to `True` for the stage you intend to execute. Model downloads also require `allow_network=True`; notebook cells never install dependencies. The uv runner loads `.env` without displaying it; managed mode inherits the kernel environment. Subprocess output is streamed into the cell, nonzero exits raise errors, and kernel interruption stops the running subprocess group on POSIX.
 
@@ -50,6 +74,22 @@ Audit, inspect the report, freeze splits and check leakage before preparing feat
 Notebook evaluation uses `runs/<experiment>/evaluation/<checkpoint-stem>/<partition>/`, with the seed subdirectory when selected, so differently named checkpoints have separate outputs. Set `DECODING_FILE` when a checkpoint needs an explicit saved validation selection, including averaged weights. Changing config/seed/partition requires rerunning the configuration/helper cells. Missing saved reports are displayed as absent rather than replaced with example values.
 
 The notebook is stored with empty outputs and null execution counts. Future verification should cover opening it from both working directories, baseline and local-hand path selection, preview behavior, missing inputs/model assets, a failing subprocess, interruption, matching resume and reference-isolated evaluation. None of these notebook scenarios has been executed.
+
+This kernel setup follows [uv's Jupyter guidance](https://docs.astral.sh/uv/guides/integration/jupyter/).
+
+### Managed Colab/Kaggle setup
+
+Keep the managed host's torch build. During future authorized setup, install uv separately, clone the repository and install the package into the active host interpreter:
+
+```bash
+uv pip install --system -e ".[notebooks]"
+```
+
+Choose no backend extra for this managed installation. The notebook checks Python, required package versions and the host torch build; the explicit `env-check` stage probes recurrent behavior. Resolve incompatibilities deliberately without silently replacing torch. Open the notebook with the managed kernel and set `RUNNER="managed"`; subprocesses use its `sys.executable`. Supply `HF_TOKEN` through the platform environment/secret facility; managed mode does not read local `.env`.
+
+For Colab, mount Drive with platform controls or a future mount cell and keep the checkout plus `data/`, `splits/`, `artifacts/` and `runs/` on persistent storage. For Kaggle, use writable persistent/exported storage and reference read-only input mounts through absolute paths in an ignored local YAML override. Set data/cache/split/run paths before auditing, then open from the checkout or `notebooks/`.
+
+No installer, clone or mount command executes automatically from the runner. Generate a real lock in the later setup phase and retain the actual managed package inventory. Do not fabricate a managed requirements export from an unresolved environment. Managed GPU/package compatibility remains unverified.
 
 ## 3. Probe and inspect the resolved plan
 

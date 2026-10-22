@@ -2,6 +2,28 @@
 
 All paths below are relative to the repository working directory. Supply real assets and provenance before running preparation. No datasets, weights or generated manifests are bundled. The canonical record implementation is `src/isl_slt/data/manifests.py`; configuration validation is in `src/isl_slt/config.py`.
 
+## Local storage layout
+
+`data/`, `splits/`, `artifacts/` and `runs/` are ignored local storage roots, created when inputs are supplied or commands write outputs. They need no tracked README or placeholder file. These paths are configurable defaults; set revisions, columns and metadata before auditing.
+
+| Path | Contents |
+| --- | --- |
+| `data/raw/ISLTranslate.csv`, `data/raw/ISL-signer_validation.csv` | Original target annotations and interpreter references |
+| `data/raw/poses/<uid>.pose` | Matching real target poses |
+| `data/raw/iSign_v1.1.csv`, `data/raw/isign-poses/<uid>.pose` | Optional additional-iSign transfer inputs |
+| `data/raw/videos/<uid>.mp4` | Optional synchronized RGB inputs |
+| `data/metadata/source_mapping.csv`, `isign_source_mapping.csv` | Authoritative target and optional transfer identities |
+| `data/metadata/target_timing.csv`, `target_rgb.csv` | Optional verified context timing and RGB geometry |
+| `data/manifests/target.jsonl`, `target.audit.json` | Generated immutable target manifest and audit report; transfer adds `pretrain.jsonl` and `pretrain.audit.json` |
+| `splits/source-v1/` | Immutable memberships and leakage reports; transfer uses `splits/source-v1-transfer/` |
+| `artifacts/models/flan-t5-small/` | Prepared generic T5/tokenizer files and `asset.json` provenance |
+| `artifacts/models/resnet18/resnet18-f37072fd.pth` | Optional declared RGB initializer |
+| `artifacts/features/<fingerprint>/`, `artifacts/rgb/` | Pose arrays/metadata/index and optional frozen RGB vectors |
+| `artifacts/huggingface/`, `artifacts/nltk_data/` | Local HF cache and explicitly prepared WordNet, as in `.env.example` |
+| `runs/<experiment>/` | Resolved run configuration, checkpoints, predictions, metrics and logs |
+
+Filenames without a repeated directory prefix in a table row share that row's directory. Optional spaCy/BERTScore resources and `features.statistics_path` use declared local paths. Keep raw annotations immutable and prepared-asset provenance with retained experiments. Rebuild stale caches instead of editing their metadata.
+
 ## Annotation adapters
 
 `data.target` configures the primary annotations and pose directory. `data.pretrain` is absent in the baseline and explicitly configured for transfer. Each adapter declares a dataset name, exact dataset revision, annotation revision, paths and column aliases. `dataset_revision: REQUIRED` intentionally prevents manifest creation.
@@ -88,7 +110,23 @@ Pose caches use non-pickle `.npz` arrays with JSON metadata under a preprocessin
 
 `prepare-model --allow-network` is the explicit model-download step. T5 assets are bound to repository, requested revision, resolved commit and file hashes in `asset.json`. The prepared generic initializer is distinct from task-specific trained checkpoints. Optional local spaCy, WordNet and BERTScore resources must be supplied explicitly.
 
-See the [data directory guide](../data/README.md), [artifact directory guide](../artifacts/README.md) and [runbook](runbook.md) for placement and commands.
+See the [local storage layout](#local-storage-layout) for placement and the [runbook](runbook.md) for preparation commands.
+
+## Run outputs and retention
+
+| Within `runs/<experiment>/` | Purpose |
+| --- | --- |
+| `resolved.json`, `compatibility.json` | Complete configuration and data/model/tokenizer/cache/numerical fingerprints |
+| `events.jsonl`, `tokenizer/`, optional `lexicon.json` | Actual update/validation events and saved text resources |
+| `validation/epoch-*.jsonl`, `validation/epoch-*.json` | Free-generation validation predictions and decoding candidates |
+| `checkpoints/last.pt` | Full continuation state; the only resumable checkpoint |
+| `checkpoints/best-bleu.pt`, `best-chrf.pt`, `best-guarded.pt`, `epoch-*.pt` | Inference snapshots with complete reconstruction metadata; optional pretraining best snapshots live in `checkpoints/pretrain/` |
+| `evaluation/<partition>/` | `predictions.jsonl`, `metrics.json` and validation's `decoding.json` when selected |
+| `diagnostics/<partition>/` | Paired real/blank/incorrect/shuffled predictions and reports |
+
+Evaluation destinations are explicit CLI arguments. The notebook inserts `<checkpoint-stem>/` before the partition to separate checkpoints. Seed overrides add `seed-<seed>/` below the experiment directory. Checkpoint formats and guarded selection are documented in [architecture](architecture.md#reproducibility-and-checkpointing).
+
+Retain exact memberships/revisions, model identities, resolved configs, dependency/backend inventory, checkpoint checksums, decoding selection and raw predictions together. Load only trusted local checkpoints. Averaged weights are inference-only and require fresh validation decoding selection. Missing metric resources remain unavailable; no report file alone establishes successful validation.
 
 ## Review-era contracts
 

@@ -2,30 +2,11 @@
 
 The repository contains an implementation of the training/evaluation pipeline and operational documentation. It has not been executed or numerically validated. No dependencies, datasets or model weights have been installed/downloaded, no notebooks or tests have been run, and no training or paid compute has been started.
 
-## Implemented source
+## Implemented scope
 
-| Area | Implemented behavior |
-| --- | --- |
-| Configuration | Strict schemas, relative YAML inheritance, cross-feature/stage checks and explicit experiment configs |
-| Data | CSV adapters, revisioned records, corrections, source provenance, interpreter references and pose-header inspection |
-| Integrity | Asset checksums, immutable manifests, source-group splits, membership hashes, leakage checks and transfer filtering |
-| Features | Shoulder-normalized pose/motion channels, validity masks, anatomy variants, verified context and fingerprinted caches |
-| Baseline | Masked temporal CNN, packed two-layer BiLSTM, bridge and full generic FLAN-T5-small with translation CE |
-| Optional methods | Weak lexical BCE, staged transfer, sparse face/bones/local hands, cached/live RGB and attention-LSTM |
-| Training | Token-normalized accumulation, staged AdamW groups, precision policy, clipping, early stopping and wall-time exits |
-| Persistence | Atomic checkpoints, tokenizer/RNG/optimizer/scheduler/scaler state, compatibility checks and exact-resume contracts |
-| Evaluation | Free generation, validation decoding selection, corpus metrics, separate gold references and visual diagnostics |
-| Analysis | Seed summaries, source-paired bootstrap, inference-only checkpoint averaging, reference-free prediction and timing |
-| Environment | uv dependency/backend declarations, local credential template and recurrent environment probe |
-| Notebook | One unexecuted CLI runner with per-stage previews, optional model-download opt-in, derived paths and saved-report inspection |
+The package covers revisioned data/provenance, immutable source splits, pose/RGB caches, the CE-only baseline, explicit experiments, training/resume, reference-free prediction and scored diagnostics. See [architecture](architecture.md) for contracts, [experiments](experiments.md) for optional paths and the [runbook](runbook.md) for execution commands.
 
-An implemented path is not a verified path. The tables describe source coverage, not test results or completed experiments.
-
-## Retained documentation
-
-The six guides cover [architecture](architecture.md), [data contracts](data_contracts.md), [experiments](experiments.md), [AMD setup](amd_setup.md), [operations](runbook.md) and this status record. Directory README files describe local [data](../data/README.md), [splits](../splits/README.md), [artifacts](../artifacts/README.md) and [run outputs](../runs/README.md).
-
-Offline CPU tests are restored under tests/ with a pytest dev extra; none have been executed. One [pipeline runner notebook](../notebooks/run_pipeline.ipynb) supports uv and managed modes and retains empty outputs/null execution counts. Lint tooling and unrelated presets are not restored.
+Offline synthetic CPU tests remain under `tests/`; the single [runner notebook](../notebooks/run_pipeline.ipynb) supports uv and managed kernels with preview defaults and empty outputs/null execution counts. Source coverage is not evidence of passing tests or completed experiments.
 
 ## External inputs still required
 
@@ -64,12 +45,39 @@ No experiment scores, throughput measurements, latency values, memory benchmarks
 
 Future results should retain dataset/annotation/model revisions, exact memberships, resolved configs, dependency lock, package/backend versions, seeds, checkpoint checksums, decoding selection, metric signatures and raw predictions. Record measured failures and limitations alongside successful runs.
 
-## Review fix status
+## Review task ledger
 
-The [task ledger](review_fixes.md) records P0–P3 decisions. Implemented changes cover CSV aliases/deduplication, evidence-bearing source candidates, explicit archive inspection/selective extraction, managed notebook profiles, strict backend policy, paired gold scoring, effective metric/decoding fingerprints, optional scaling/velocity ablations, overfit/guarded presets, validated cache-only operation, indexed signatures, lightweight snapshots, shared decoding, code/environment-bound resume and measured logging.
+Implementation decisions against the supplied `ISL_Fix_Plan.md` are retained here instead of a separate ledger file. The user-supplied plan remains unmodified.
 
-Integration checks also enforce matching scaling and RGB initializer identities across training/evaluation, keep full-verification mode from changing scientific cache identity, and provide annotation-UID extraction requests before immutable auditing.
+Corrections applied to the proposed plan: candidate source mappings require evidence before verification; determinism remains strict; uv is retained in managed environments; velocity stays per-second and present in the baseline; scaling/removal are opt-in experiments; inference snapshots retain all reconstruction metadata.
 
-Static validation parses source/test/script/notebook Python syntax, notebook JSON and pyproject TOML, and checks references/whitespace. It does not import/run the project. No test passes, real dataset counts, sample pose compatibility, convergence, resume equivalence or backend performance are claimed.
+| Task | Implemented decision and deferred acceptance |
+| --- | --- |
+| P0-1 | Full public gold headers plus short aliases; ambiguous aliases still fail. Offline three-row attachment/ambiguity tests written, not run. |
+| P0-2 | Collapse only byte-equivalent parsed CSV rows with the same UID; preserve whitespace/raw CSV and distinct UIDs. Audit kept/dropped row numbers and row hashes; conflicting duplicates fail. Tests written, not run. |
+| P0-3 | Ordered sentence/DEF candidates preserve internal/trailing hyphens. make-source-map exports a separate unverified CSV and rule/revision/hash report; unresolved UIDs fail after reporting. Authoritative evidence remains required, including cross-dataset double-hyphen resolution. |
+| P0-4 | Strict determinism remains default; explicit warn mode is debugging only. NVIDIA workspace setup precedes CUDA use; HIP workspace/backend probe remains separate. env-check reports policy and configured workspaces. |
+| P0-5 | Managed notebooks validate declared packages/Python/torch instead of requiring .venv, retain the host torch build and use uv for installation. Lock resolution and real environment checks are deferred; no fabricated lock/requirements file or automatic installer cell. |
+| P0-6 | Explicit HF listing/CSV/part acquisition binds a resolved revision. Ordered ZIP byte parts use a seekable concatenation, safe UID indexing, bounded selective extraction and one decoded sample before bulk work. Header inspection and canonical-to-stored component aliases are implemented. Actual archive naming/schema remain unverified. |
+| P1-1 | Full-partition transcript scores remain primary; transcript/interpreter scores on the exact annotated subset now share UID count/hash and source count. No hard-coded 397/291 assumptions. Paired synthetic scoring test written. |
+| P1-2 | Reports fingerprint effective generation, selected beam, requested metrics/signatures, normalization, semantic resource identity and numerical policy. Seed summaries reject mismatches or legacy reports without this identity. |
+| P1-3 | Cased BLEU remains primary; cumulative BLEU-1..4 and chrF++ additionally expose _lc scores with independent signatures. The test uses four tokens. Lowercasing does not establish paper-membership/metric equivalence. |
+| P1-4 | Standardization is opt-in. Explicit continuous-channel validity fits target-training-only statistics; masks stay unchanged and invalid values stay zero. Statistics bind training membership/schema and are embedded in checkpoints for raw inference. Pose cache v2 adds continuous validity; v1 caches must be regenerated. |
+| P1-5 | Existing baseline keeps per-second velocity. Explicit velocity/no_velocity configs toggle both 96 value and 48 validity channels (384 versus 240 dimensions). No undocumented v7 baseline replacement. Actual-time invariance/dimension tests written. |
+| P1-6 | Restored overfit.yaml with no dropout/weight decay/noise/lexical loss, one unfrozen stage, greedy decoding and a separate run directory. Supply 32–64 inspected training UIDs; there is no BLEU success assertion. |
+| P1-7 | best-guarded requires a new historical BLEU maximum and chrF within 0.5 percentage points of the historical chrF maximum before the update. Tolerance is explicit; early stopping/primary checkpoint policies remain separate. |
+| P2-1 | Ordinary pose/cached-RGB datasets validate arrays and dependency signatures against audited immutable checksums without raw files. verify-cache defaults to full raw verification; train/evaluate/diagnostics support --verify-assets. Image-mode RGB and raw prediction still need actual assets. |
+| P2-2 | Array SHA checks occur at dataset construction; item reads check immutable file stat identities instead of rehashing. RGB initializer consistency is enforced. Worker/persistent/pinned-memory support is explicit; workers=0 remains the unprofiled debugging default. Two-worker/hash-call tests written. |
+| P2-3 | Per-epoch validation uses generation.train_beams (default greedy); full generation.beams is reserved for explicit validation selection. Test/gold require the final selection when search policies differ. This avoids silently treating greedy development selection as the final sweep. |
+| P2-4 | Source/partition timelines are indexed once for datasets/preparation; command-scoped signature/hash sessions verify each raw asset once and reject in-command mutation. A 200-clip source test counts raw hash calls. |
+| P2-5 | Only last.pt retains optimizer/scheduler/scaler/RNG continuation state. Best/epoch/averaged snapshots keep all model, tokenizer, lexicon, T5 config, input dimensions, statistics, compatibility and decoding/provenance fields, and are explicitly inference-only. Reports/summaries expose checkpoint bytes. |
+| P3-1 | Restored offline CPU-only pytest coverage, including T/2/T/4 padding, frozen-T5 gradients, accumulation, source leakage/splits, reference-free generation, two-window RNG/optimizer resume and paired diagnostics. Tiny T5 is constructed from a local synthetic config, never downloaded. Suite runtime/pass status remain unmeasured. |
+| P3-2 | Renamed the external protocol external-membership-gold-safe, with algorithm=external-membership. Legacy config aliases warn; old split metadata must be re-exported into a new directory. Exact paper reproduction is not established by supplied counts or external membership. |
+| P3-3 | Shared validation-selection identity checks now serve evaluate/predict/benchmark/diagnostics. All expose --decoding; averaged weights and changed generation policies require the matching checkpoint checksum, validation hash and effective generation hash. |
+| P3-4 | Resume binds source hash, Git commit/dirty state, Python/platform, actual package inventory and lock/pyproject hashes. --allow-code-change records only code transitions and never bypasses environment/data/numerical incompatibility. Legacy unbound resumes fail explicitly. |
+| P3-5 | Update logs include group LRs, measured synchronized update time, examples/frames throughput and peak allocated GPU bytes; epochs separate training/validation time. summarize_run.py reports actual measurements/checkpoint sizes, leaving unmeasured values null. |
+| P3-6 | Consolidated operating guides in docs/ and updated the preview-only notebook for the corrected data/cache/environment/decoding workflow. Documented RGB slot masks, feature-only noise and declarative repeat/bootstrap fields. Integration checks bind evaluation statistics/RGB identities, memoize RGB hashing and preserve cache identity across verification modes. |
 
-The definition of done in the supplied plan requires future executed CPU tests and real-data checks. Those remain deferred under the implementation-only instruction. No uv.lock, pinned managed export or real split-count report has been fabricated.
+Integration checks also enforce matching scaling/RGB initializer identities across training/evaluation, keep full-verification mode from changing cache identity, and provide annotation-UID extraction requests before immutable auditing.
+
+The supplied plan's executed acceptance criteria remain deferred under the implementation-only instruction. No resolved lockfile, pinned managed export, split-count report, backend stability, convergence or exact-resume equivalence has been fabricated. The two-word BLEU fixture was replaced with a four-token corpus; all tests remain unexecuted.
