@@ -8,6 +8,7 @@ from pydantic import Field
 
 from isl_slt.config import Config, Runtime, Strict
 from isl_slt.data.dataset import Collator, raw_sequence
+from isl_slt.data.context import SourceIndex
 from isl_slt.data.manifests import Record
 from isl_slt.evaluation.generation import decode_tokens
 from isl_slt.features.pose import prepare_pose
@@ -71,9 +72,10 @@ class Predictor:
 
     def prepare(self, inputs: list[VisualInput]) -> list[dict]:
         records = [item.as_record() for item in inputs]
+        indexed = SourceIndex(records)
         items = []
         for record in records:
-            sequence = raw_sequence(record, records, self.config)
+            sequence = raw_sequence(record, indexed, self.config)
             prepared = prepare_pose(sequence, self.config.features, self.config.context.enabled)
             if prepared.values.shape[1] != self.model.visual.cnn.convolutions[0].in_channels:
                 raise ValueError("Inference features do not match checkpoint input schema")

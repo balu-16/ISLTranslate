@@ -9,11 +9,11 @@ import torch
 from torch.utils.data import Dataset, Sampler
 
 from isl_slt.config import Config
-from isl_slt.data.context import assemble_context
+from isl_slt.data.context import SourceIndex, assemble_context
 from isl_slt.data.lexical import BPETokenizer, Lexicon
 from isl_slt.data.manifests import Record
 from isl_slt.data.pose import read_pose
-from isl_slt.features.cache import cache_paths, read_features
+from isl_slt.features.cache import SignatureSession, cache_paths, read_features
 from isl_slt.features.pose import resample_sequence
 from isl_slt.features.statistics import apply_statistics, load_statistics
 from isl_slt.utils.io import file_hash, fingerprint, read_json
@@ -22,7 +22,8 @@ from isl_slt.utils.io import file_hash, fingerprint, read_json
 def dependencies_for(record: Record, records: list[Record], config: Config) -> list[Record]:
     if not config.context.enabled:
         return [record]
-    return [r for r in records if r.source_id == record.source_id and r.split == record.split]
+    index = records if isinstance(records, SourceIndex) else SourceIndex(records)
+    return index.dependencies(record)
 
 
 def raw_sequence(record: Record, records: list[Record], config: Config):
@@ -39,11 +40,13 @@ class PoseDataset(Dataset):
         preflight = config.data.verify_assets if preflight is None else preflight
         self.statistics = load_statistics(config)
         self.cache_files, self.rgb_initializer = {}, None
-        self.context_records = context_records if context_records is not None else records
+        self.context_records = SourceIndex(context_records if context_records is not None else records)
+        self.signatures = SignatureSession()
         self.lengths, self.input_dim, cache_identities, video_hashes = [], None, [], {}
         for record in records:
             artifact_paths = list(cache_paths(config, record))
-            prepared = read_features(config, record, dependencies_for(record, self.context_records, config), verify_assets=preflight)
+            prepared = read_features(config, record, dependencies_for(record, self.context_records, config),
+                                     verify_assets=preflight, signatures=self.signatures)
             self.lengths.append(len(prepared.times))
             if self.input_dim is not None and self.input_dim != prepared.values.shape[1]:
                 raise ValueError("Mixed feature dimensions in one dataset")
@@ -88,7 +91,7 @@ class PoseDataset(Dataset):
         if any(self.file_state(path) != expected for path, expected in self.cache_files[record.key].items()):
             raise ValueError(f"{record.uid}: cache artifact changed during dataset lifetime")
         prepared = read_features(self.config, record, dependencies_for(record, self.context_records, self.config),
-                                 verify_assets=False, verify_arrays=False)
+                                 verify_assets=False, verify_arrays=False, signatures=self.signatures)
         features = torch.from_numpy(apply_statistics(prepared, self.statistics))
         generator = torch.Generator().manual_seed(self.config.training.seed + self.epoch * 1000003 + index)
         if self.training and self.config.training.pose_noise_std:

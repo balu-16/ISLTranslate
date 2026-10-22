@@ -4,6 +4,8 @@ from pathlib import Path
 
 from isl_slt.config import Config
 from isl_slt.utils.io import file_hash, fingerprint, read_json, write_json, write_jsonl
+from isl_slt.data.context import SourceIndex
+from isl_slt.features.cache import SignatureSession
 
 
 def planned_experiment(config: Config) -> dict:
@@ -139,12 +141,14 @@ def prepare_features(config: Config) -> dict:
     from isl_slt.features.pose import prepare_pose
     partitions, _ = checked_splits(config.data)
     results = {}
+    signatures = SignatureSession()
     for name, records in partitions.items():
+        indexed = SourceIndex(records)
         counts = []
         for record in records:
-            sequence = raw_sequence(record, records, config)
+            sequence = raw_sequence(record, indexed, config)
             prepared = prepare_pose(sequence, config.features, config.context.enabled)
-            metadata = write_features(config, record, prepared, dependencies_for(record, records, config))
+            metadata = write_features(config, record, prepared, dependencies_for(record, indexed, config), signatures)
             counts.append({"uid": record.uid, "frames": metadata["frames"], "input_dim": metadata["input_dim"]})
         results[name] = counts
     report = {"preprocessing_fingerprint": preprocessing_fingerprint(config), "partitions": results}
@@ -159,10 +163,12 @@ def verify_cache(config: Config, verify_assets: bool = True) -> dict:
     from isl_slt.features.cache import read_features
     partitions, _ = checked_splits(config.data)
     counts = {}
+    signatures = SignatureSession()
     for name, records in partitions.items():
+        indexed = SourceIndex(records)
         for record in records:
-            dependencies = dependencies_for(record, records, config)
-            prepared = read_features(config, record, dependencies, verify_assets=verify_assets)
+            dependencies = dependencies_for(record, indexed, config)
+            prepared = read_features(config, record, dependencies, verify_assets=verify_assets, signatures=signatures)
             if config.rgb.mode == "cached":
                 from isl_slt.features.rgb import read_rgb
                 read_rgb(config, record, dependencies, prepared.times, verify_assets=verify_assets)

@@ -30,6 +30,25 @@ def file_hash(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+class HashSession:
+    """Command-scoped hashing: verify each unchanged file once, reject in-command mutations."""
+    def __init__(self):
+        self.entries = {}
+
+    def hash(self, path):
+        path = Path(path).resolve()
+        status = path.stat()
+        identity = (status.st_size, status.st_mtime_ns, status.st_ino)
+        if path in self.entries:
+            previous, digest = self.entries[path]
+            if identity != previous:
+                raise ValueError(f"Asset changed during verification: {path}")
+            return digest
+        digest = file_hash(path)
+        self.entries[path] = (identity, digest)
+        return digest
+
+
 @contextmanager
 def atomic_open(path: str | Path, mode: str = "wb") -> Iterator:
     path = Path(path)
