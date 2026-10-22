@@ -204,9 +204,16 @@ def run_training(config: Config, resume: str | None = None, allow_code_change: b
     input_dim = datasets["target"].input_dim
     if any(dataset.input_dim != input_dim for dataset in [*datasets.values(), validation]):
         raise ValueError("Stage/validation feature dimensions differ")
+    if config.rgb.mode == "cached" and any(
+        dataset.rgb_initializer != rgb_initializer["sha256"] for dataset in [*datasets.values(), validation]
+    ):
+        raise ValueError("Training stages/validation use different RGB initializers")
     artifacts = {name: dataset.cache_fingerprint for name, dataset in datasets.items()}
     artifacts["validation"] = validation.cache_fingerprint
     expected = compatibility(config, input_dim, split_metadata, tokenizer_bundle, lexical_payload, rgb_initializer, artifacts)
+    if any((dataset.statistics["signature"] if dataset.statistics else None) != expected["statistics"]
+           for dataset in [*datasets.values(), validation]):
+        raise ValueError("Feature statistics changed across dataset preparation or checkpoint binding")
     if restored is not None:
         transition = validate_resume_compatibility(restored["compatibility"], expected, allow_code_change)
         if transition:
@@ -284,6 +291,8 @@ def run_training(config: Config, resume: str | None = None, allow_code_change: b
                 if device.type == "cuda":
                     torch.cuda.reset_peak_memory_stats(device)
                 update_started = time.perf_counter()
+                learning_rates = {f"{group.get('kind', 'group')}-{index}": group["lr"]
+                                  for index, group in enumerate(optimizer.param_groups)}
                 outcome = update_window(model, optimizer, scheduler, scaler, window, config, device,
                                         config.lexical.weight * ramp)
                 synchronize(device)
@@ -292,8 +301,7 @@ def run_training(config: Config, resume: str | None = None, allow_code_change: b
                 frames = sum(int(batch.visual["lengths"].sum()) for batch in window)
                 telemetry = {"update_seconds": elapsed, "examples": examples, "frames": frames,
                     "examples_per_second": examples / elapsed, "frames_per_second": frames / elapsed,
-                    "learning_rates": {f"{group.get('kind', 'group')}-{index}": group["lr"]
-                                       for index, group in enumerate(optimizer.param_groups)},
+                    "learning_rates": learning_rates,
                     "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else None}
                 state["batch_offset"] += len(window)
                 state["updates"] += int(outcome["updated"])

@@ -8,10 +8,11 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import re
 import zipfile
 
 from isl_slt.config import Features, load_config
-from isl_slt.data.manifests import Record, load_manifest
+from isl_slt.data.manifests import Record, adapt_csv, load_manifest
 from isl_slt.data.pose import decode_pose
 from isl_slt.features.pose import selected_joints
 from isl_slt.utils.io import atomic_open, file_hash, write_json
@@ -21,6 +22,10 @@ class MultipartReader(io.RawIOBase):
     """A seekable concatenation; zipfile can read the central directory across part boundaries."""
     def __init__(self, parts):
         super().__init__()
+        parts = list(parts)
+        suffixes = [re.search(r"iSign-poses_v1\.1_part_([a-z]{2})$", Path(path).name) for path in parts]
+        if any(suffixes) and [match.group(1) if match else None for match in suffixes] != ["aa", "ab", "ac", "ad"]:
+            raise ValueError("Supply all four iSign pose ZIP parts in aa, ab, ac, ad order")
         self.streams, self.offsets, self.position = [], [0], 0
         try:
             for path in parts:
@@ -102,7 +107,9 @@ def inspect_pose_bytes(data: bytes, settings: Features | None = None) -> dict:
         raise ValueError(f"Required pose landmarks are absent: {missing}")
     return {"frames": len(sequence.times), "fps": sequence.metadata["fps"],
             "width": sequence.width, "height": sequence.height,
-            "components": sequence.metadata["components"], "points": [list(name) for name in sequence.names]}
+            "components": sequence.metadata["components"], "points": [list(name) for name in sequence.names],
+            "stored_components": [{"name": component.name, "format": component.format,
+                                   "points": list(map(str, component.points))} for component in pose.header.components]}
 
 
 def extract_selected(parts, records, output, *, settings=None, max_bytes=50 * 1024**3,
@@ -149,14 +156,27 @@ def fetch_main(argv=None):
     parser.add_argument("--allow-network", action="store_true")
     parser.add_argument("--archives", nargs="+", help="Ordered local aa, ab, ac, ad byte parts")
     parser.add_argument("--manifest")
+    parser.add_argument("--uids-csv", help="Target annotation CSV for extraction before immutable auditing")
     parser.add_argument("--config", default="configs/baseline.yaml")
     parser.add_argument("--max-bytes", type=int, default=50 * 1024**3)
     args = parser.parse_args(argv)
     if args.archives:
-        if not args.manifest:
-            parser.error("--archives requires --manifest")
-        report = extract_selected(args.archives, load_manifest(args.manifest), args.out,
-                                  settings=load_config(args.config).features, max_bytes=args.max_bytes)
+        if bool(args.manifest) == bool(args.uids_csv):
+            parser.error("--archives requires exactly one of --manifest or --uids-csv")
+        config = load_config(args.config)
+        if args.manifest:
+            records = load_manifest(args.manifest)
+        else:
+            adapter = config.data.target.model_copy(update={"annotations": args.uids_csv, "source_mapping": None,
+                "metadata_csv": None, "corrections_jsonl": None,
+                "dataset_revision": config.data.target.dataset_revision if config.data.target.dataset_revision != "REQUIRED"
+                                    else "unverified-extraction-request"})
+            records = adapt_csv(adapter)
+        report = extract_selected(args.archives, records, args.out,
+                                  settings=config.features, max_bytes=args.max_bytes)
+        report["selection_sha256"] = file_hash(args.manifest or args.uids_csv)
+        report["selection_kind"] = "canonical-manifest" if args.manifest else "unaudited-annotation-UID-request"
+        write_json(Path(args.out) / "extraction.json", report)
         print(json.dumps({"count": len(report["files"]), "report": str(Path(args.out) / "extraction.json")}))
         return
     if not args.allow_network or not (args.list or args.csv or args.parts):

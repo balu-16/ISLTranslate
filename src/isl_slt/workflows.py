@@ -88,7 +88,8 @@ def audit(config: Config) -> dict:
                 f"{name}-file-sha256:{value}" for name, value in hashes.items() if name in ("pose", "video")})
             locked.append(record.model_copy(update={"asset_hashes": hashes, "duplicate_fingerprints": duplicates}))
         records = locked
-        report = {**audit_records(records), **adapter_audit}
+        report = {**audit_records(records), **adapter_audit,
+                  "annotations_sha256": file_hash(adapter.annotations), "dataset_revision": adapter.dataset_revision}
         pose_audits = []
         for record in records:
             if not Path(record.pose_path).is_file():
@@ -172,7 +173,7 @@ def verify_cache(config: Config, verify_assets: bool = True) -> dict:
             prepared = read_features(config, record, dependencies, verify_assets=verify_assets, signatures=signatures)
             if config.rgb.mode == "cached":
                 from isl_slt.features.rgb import read_rgb
-                read_rgb(config, record, dependencies, prepared.times, verify_assets=verify_assets)
+                read_rgb(config, record, dependencies, prepared.times, verify_assets=verify_assets, signatures=signatures)
         counts[name] = len(records)
     return {"verified_cache_counts": counts, "raw_assets_verified": verify_assets}
 
@@ -235,14 +236,17 @@ def prepare_rgb(config: Config) -> dict:
     device = device_for(config.runtime)
     encoder = RGBEncoder(config.rgb.weights_path).to(device).eval()
     counts = {}
+    signatures = SignatureSession()
     for name, records in partitions.items():
+        indexed = SourceIndex(records)
         for record in records:
-            rgb_signature(config, record, dependencies_for(record, records, config))
-            sequence = raw_sequence(record, records, config)
-            images, masks = load_crops(record, records, sequence, config)
+            dependencies = dependencies_for(record, indexed, config)
+            rgb_signature(config, record, dependencies, signatures=signatures)
+            sequence = raw_sequence(record, indexed, config)
+            images, masks = load_crops(record, indexed, sequence, config)
             with torch.no_grad(), autocast(config.runtime, device):
                 vectors = encoder(images.to(device)).float().cpu().numpy()
-            write_rgb(config, record, dependencies_for(record, records, config), vectors, masks.numpy(), sequence.times)
+            write_rgb(config, record, dependencies, vectors, masks.numpy(), sequence.times, signatures)
         counts[name] = len(records)
     return {"cached_examples": counts, "cnn_trainable": False, "revision": config.rgb.revision}
 
@@ -262,6 +266,11 @@ def evaluation_inputs(config: Config, checkpoint: str, partition: str):
     if saved_hash is None or saved_hash != metadata["hashes"][partition]:
         raise ValueError("Evaluation partition differs from the checkpoint's immutable manifest")
     dataset = PoseDataset(partitions[partition], config, training=False)
+    statistics_signature = dataset.statistics["signature"] if dataset.statistics else None
+    if statistics_signature != predictor.checkpoint["compatibility"].get("statistics"):
+        raise ValueError("Evaluation feature statistics differ from the checkpoint")
+    if config.rgb.mode == "cached" and dataset.rgb_initializer != predictor.checkpoint["rgb_initializer"]["sha256"]:
+        raise ValueError("Evaluation RGB initializer differs from the checkpoint")
     return predictor, dataset, metadata
 
 
@@ -311,7 +320,8 @@ def evaluate(config: Config, checkpoint: str, partition: str, output: str, decod
                  "signatures": metric_report["signatures"],
                  "bertscore_model": config.evaluation.bertscore_model,
                  "bertscore_revision": config.evaluation.bertscore_revision,
-                 "precision": config.runtime.precision, "recurrent_fp32": config.runtime.recurrent_fp32}
+                 "precision": config.runtime.precision, "recurrent_fp32": config.runtime.recurrent_fp32,
+                 "deterministic": config.runtime.deterministic, "determinism_mode": config.runtime.determinism_mode}
     report = {"partition": partition, "membership_hash": metadata["hashes"][partition],
               "protocol": metadata["protocol"], "seed": predictor.config.training.seed,
               "comparison_fingerprint": comparison_fingerprint(predictor, effective), "selected_beams": beams,

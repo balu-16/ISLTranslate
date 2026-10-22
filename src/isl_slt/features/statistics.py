@@ -69,11 +69,15 @@ def prepare_stats(config):
     from isl_slt.data.dataset import dependencies_for
     from isl_slt.data.splits import checked_splits
     from isl_slt.features.cache import read_features
+    from isl_slt.features.cache import SignatureSession
+    from isl_slt.data.context import SourceIndex
     if not config.features.standardize:
         raise ValueError("prepare-stats requires features.standardize=true")
     partitions, metadata = checked_splits(config.data)
     records = partitions["train"]
-    prepared = (read_features(config, row, dependencies_for(row, records, config)) for row in records)
+    index, signatures = SourceIndex(records), SignatureSession()
+    prepared = (read_features(config, row, dependencies_for(row, index, config),
+                              signatures=signatures) for row in records)
     payload = fit_statistics(prepared, preprocessing_fingerprint(config), metadata["hashes"]["train"])
     write_json(config.features.statistics_path, payload, immutable=True)
     return payload

@@ -18,3 +18,26 @@ def test_scaling_leaves_masks_and_invalid_values_unchanged():
         continuous_valid=np.array([[True, False]]), metadata=train.metadata)
     apply_statistics(validation, statistics)
     assert statistics["mean"][0] == 3.
+
+
+def test_prepare_stats_never_reads_validation(tmp_path, record_factory, monkeypatch):
+    from isl_slt.config import Config
+    from isl_slt.data import splits
+    from isl_slt.features import cache
+    from isl_slt.features.statistics import prepare_stats
+    config = Config()
+    config.features.standardize = True
+    config.features.statistics_path = str(tmp_path / "stats.json")
+    training = record_factory("training-1", split="train")
+    validation = record_factory("validation-1", split="validation")
+    monkeypatch.setattr(splits, "checked_splits", lambda data: (
+        {"train": [training], "validation": [validation]}, {"hashes": {"train": "train-hash"}}))
+    called = []
+    def prepared(config, row, *args, **kwargs):
+        called.append(row.uid)
+        return SimpleNamespace(values=np.array([[2.], [4.]], dtype=np.float32),
+            continuous_valid=np.ones((2, 1), bool), metadata={"continuous_channels": [0]})
+    monkeypatch.setattr(cache, "read_features", prepared)
+    payload = prepare_stats(config)
+    assert called == ["training-1"]
+    assert payload["mean"] == [3.]

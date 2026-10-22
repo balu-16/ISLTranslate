@@ -35,7 +35,13 @@ data:
   protocol: source-held-out
   original_splits_csv: null
   workers: 0
+  verify_assets: false
+  persistent_workers: true
+  pin_memory: true
 features:
+  component_names: {}
+  standardize: false
+  statistics_path: artifacts/stats/pose.json
   velocity: true
   schema_version: upper-hands-v1
   person_index: null
@@ -97,6 +103,7 @@ training:
   max_target_epochs: 20
   early_stopping_patience: 3
   retain_epoch_checkpoints: 3
+  guarded_chrf_tolerance: 0.5
   pose_noise_std: 0
   overfit_uids: null
   stages:

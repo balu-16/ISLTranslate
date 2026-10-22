@@ -68,3 +68,21 @@ def test_manifest_changes_cannot_reuse_cache(tmp_path, record_factory):
     changed = record.model_copy(update={"fps": 999.})
     with pytest.raises(ValueError, match="metadata changed"):
         read_features(config, changed)
+
+
+def test_full_verification_does_not_change_cache_identity(tmp_path, record_factory):
+    record, config = cached_example(tmp_path, record_factory)
+    cached = PoseDataset([record], config)
+    verified = PoseDataset([record], config, preflight=True)
+    assert cached.cache_fingerprint == verified.cache_fingerprint
+
+
+def test_verify_cache_explicitly_requires_raw_assets(tmp_path, record_factory, monkeypatch):
+    from isl_slt.data import splits
+    from isl_slt.workflows import verify_cache
+    record, config = cached_example(tmp_path, record_factory)
+    Path(record.pose_path).unlink()
+    monkeypatch.setattr(splits, "checked_splits", lambda data: ({"train": [record]}, {}))
+    assert verify_cache(config, False)["raw_assets_verified"] is False
+    with pytest.raises(FileNotFoundError):
+        verify_cache(config)

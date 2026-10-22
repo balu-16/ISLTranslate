@@ -42,7 +42,7 @@ class PoseDataset(Dataset):
         self.cache_files, self.rgb_initializer = {}, None
         self.context_records = SourceIndex(context_records if context_records is not None else records)
         self.signatures = SignatureSession()
-        self.lengths, self.input_dim, cache_identities, video_hashes = [], None, [], {}
+        self.lengths, self.input_dim, cache_identities = [], None, []
         for record in records:
             artifact_paths = list(cache_paths(config, record))
             prepared = read_features(config, record, dependencies_for(record, self.context_records, config),
@@ -56,7 +56,7 @@ class PoseDataset(Dataset):
             if config.rgb.mode == "cached":
                 from isl_slt.features.rgb import read_rgb, rgb_paths
                 read_rgb(config, record, dependencies_for(record, self.context_records, config), prepared.times,
-                         verify_assets=preflight)
+                         verify_assets=preflight, signatures=self.signatures)
                 _, rgb_metadata = rgb_paths(config, record)
                 cache_identity["rgb"] = read_json(rgb_metadata)
                 initializer = cache_identity["rgb"]["signature"]["weights_sha256"]
@@ -64,14 +64,15 @@ class PoseDataset(Dataset):
                     raise ValueError("Mixed RGB initializer checksums in one dataset")
                 self.rgb_initializer = initializer
                 artifact_paths.extend(rgb_paths(config, record))
-            if config.rgb.mode != "off" and preflight:
+            if config.rgb.mode != "off":
                 for dependency in dependencies_for(record, self.context_records, config):
                     if not dependency.video_path or dependency.image_transform is None:
                         raise ValueError(f"{dependency.uid}: RGB requires video and coordinate-transform metadata")
-                    if dependency.video_path not in video_hashes:
-                        video_hashes[dependency.video_path] = file_hash(dependency.video_path)
-                    actual = video_hashes[dependency.video_path]
-                    if dependency.asset_hashes.get("video", actual) != actual:
+                    expected_video = dependency.asset_hashes.get("video")
+                    if expected_video is None:
+                        raise ValueError("RGB requires audited video checksums")
+                    actual = self.signatures.hashes.hash(dependency.video_path) if preflight else expected_video
+                    if expected_video != actual:
                         raise ValueError(f"{dependency.uid}: video changed since immutable manifest creation")
                     cache_identity.setdefault("videos", {})[dependency.key] = actual
             cache_identities.append(cache_identity)
@@ -95,7 +96,7 @@ class PoseDataset(Dataset):
         features = torch.from_numpy(apply_statistics(prepared, self.statistics))
         generator = torch.Generator().manual_seed(self.config.training.seed + self.epoch * 1000003 + index)
         if self.training and self.config.training.pose_noise_std:
-            # Only observed position channels receive small noise; masks and RGB vectors are untouched.
+            # Position-valid normalized/standardized feature channels only; derived motion/anatomy stay fixed.
             joints = prepared.observed.shape[1]
             mask = torch.from_numpy(prepared.position_valid).repeat_interleave(2, dim=1)
             features[:, :joints * 2] += torch.randn(features[:, :joints * 2].shape, generator=generator) * mask * self.config.training.pose_noise_std
@@ -106,7 +107,7 @@ class PoseDataset(Dataset):
             from isl_slt.features.rgb import read_rgb
             item["rgb"], item["rgb_mask"] = read_rgb(self.config, record,
                 dependencies_for(record, self.context_records, self.config), prepared.times,
-                verify_assets=False, verify_arrays=False)
+                verify_assets=False, verify_arrays=False, signatures=self.signatures)
         elif self.config.rgb.mode == "images":
             from isl_slt.features.rgb import load_crops
             item["images"], item["rgb_mask"] = load_crops(record, self.context_records,

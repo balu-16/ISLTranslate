@@ -2,6 +2,24 @@ import pytest
 
 from isl_slt.config import Adapter
 from isl_slt.data.manifests import resolve_source
+from isl_slt.config import Config
+from isl_slt.workflows import make_source_map
+import csv
+
+
+def test_candidate_export_records_unresolved_without_verifying(tmp_path):
+    annotations = tmp_path / "input.csv"
+    annotations.write_text("uid,text\n0EaLX2t1wPU_e1,word\ngarbage,other\n")
+    config = Config()
+    config.data.target.annotations = str(annotations)
+    config.data.target.source_mapping = str(tmp_path / "authoritative.csv")
+    output = tmp_path / "candidates.csv"
+    with pytest.raises(ValueError, match="Unresolved"):
+        make_source_map(config, str(output))
+    with output.open() as stream:
+        rows = list(csv.DictReader(stream))
+    assert {row["verified"] for row in rows} == {"false"}
+    assert not (tmp_path / "authoritative.csv").exists()
 
 
 @pytest.mark.parametrize("uid,parent", [

@@ -14,10 +14,11 @@ from isl_slt.evaluation.generation import decode_tokens
 from isl_slt.evaluation.selection import load_decoding_selection
 from isl_slt.features.pose import prepare_pose
 from isl_slt.features.statistics import apply_statistics, validate_statistics
+from isl_slt.features.cache import preprocessing_fingerprint
 from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import load_checkpoint, restore_tokenizer
 from isl_slt.utils.io import file_hash, fingerprint
-from isl_slt.utils.runtime import autocast, device_for
+from isl_slt.utils.runtime import autocast, device_for, seed_everything
 
 
 class VisualInput(Strict):
@@ -58,8 +59,14 @@ class Predictor:
             if payload["compatibility"].get("statistics") != payload["feature_statistics"]["signature"]:
                 raise ValueError("Checkpoint feature statistics mismatch")
         config = Config.model_validate(payload["config"])
+        if config.features.standardize:
+            if payload.get("feature_statistics") is None:
+                raise ValueError("Standardized checkpoint is missing embedded feature statistics")
+            validate_statistics(payload["feature_statistics"], preprocessing_fingerprint(config),
+                                payload["compatibility"]["split_hashes"]["train"])
         if runtime is not None:
             config = config.model_copy(update={"runtime": runtime})
+        seed_everything(config.training.seed, config.runtime.deterministic, config.runtime.determinism_mode == "warn")
         tokenizer_dir = Path(checkpoint_path).parent / f"tokenizer-{payload['compatibility']['tokenizer'][:16]}"
         restore_tokenizer(payload["tokenizer"], tokenizer_dir)
         tokenizer = load_tokenizer(config, tokenizer_dir)

@@ -25,7 +25,7 @@ An implemented path is not a verified path. The tables describe source coverage,
 
 The six guides cover [architecture](architecture.md), [data contracts](data_contracts.md), [experiments](experiments.md), [AMD setup](amd_setup.md), [operations](runbook.md) and this status record. Directory README files describe local [data](../data/README.md), [splits](../splits/README.md), [artifacts](../artifacts/README.md) and [run outputs](../runs/README.md).
 
-Local tests, lint tooling and redundant presets remain removed. Documentation and one [pipeline runner notebook](../notebooks/run_pipeline.ipynb) are retained. The optional `notebooks` extra declares JupyterLab/ipykernel, and the notebook is stored with no execution counts or outputs. A test suite has not been restored; no prior tests are claimed to have passed.
+Offline CPU tests are restored under tests/ with a pytest dev extra; none have been executed. One [pipeline runner notebook](../notebooks/run_pipeline.ipynb) supports uv and managed modes and retains empty outputs/null execution counts. Lint tooling and unrelated presets are not restored.
 
 ## External inputs still required
 
@@ -56,10 +56,20 @@ Local tests, lint tooling and redundant presets remain removed. Documentation an
 | Analysis | Compatible seed reports, valid source-paired comparisons, averaged decoding reselection and measured timing |
 | Notebook | Correct uv kernel, root resolution, baseline/local-hand paths, preview defaults, subprocess failures/interruption, resume and evaluation |
 
-Exact commands for executable preparation and checks are in the [runbook](runbook.md). A future test suite would need to be written or restored separately before running unit/integration tests; there is currently no bundled test command. Text inspection cannot substitute for numerical validation.
+Exact commands for executable preparation and checks are in the [runbook](runbook.md). The future test command is `uv run --no-sync pytest` after explicit `uv lock` and `uv sync --locked --extra cpu --extra dev`. The suite is written; pass status and runtime remain unmeasured. Text inspection cannot substitute for numerical validation.
 
 ## Reporting boundaries
 
 No experiment scores, throughput measurements, latency values, memory benchmarks, eligible-pool counts or compute costs have been produced. No BLEU guarantee is made. A successful input-dependence diagnostic would still not establish semantic faithfulness, and full-sequence bidirectional inference is not a streaming result.
 
 Future results should retain dataset/annotation/model revisions, exact memberships, resolved configs, dependency lock, package/backend versions, seeds, checkpoint checksums, decoding selection, metric signatures and raw predictions. Record measured failures and limitations alongside successful runs.
+
+## Review fix status
+
+The [task ledger](review_fixes.md) records P0–P3 decisions. Implemented changes cover CSV aliases/deduplication, evidence-bearing source candidates, explicit archive inspection/selective extraction, managed notebook profiles, strict backend policy, paired gold scoring, effective metric/decoding fingerprints, optional scaling/velocity ablations, overfit/guarded presets, validated cache-only operation, indexed signatures, lightweight snapshots, shared decoding, code/environment-bound resume and measured logging.
+
+Integration checks also enforce matching scaling and RGB initializer identities across training/evaluation, keep full-verification mode from changing scientific cache identity, and provide annotation-UID extraction requests before immutable auditing.
+
+Static validation parses source/test/script/notebook Python syntax, notebook JSON and pyproject TOML, and checks references/whitespace. It does not import/run the project. No test passes, real dataset counts, sample pose compatibility, convergence, resume equivalence or backend performance are claimed.
+
+The definition of done in the supplied plan requires future executed CPU tests and real-data checks. Those remain deferred under the implementation-only instruction. No uv.lock, pinned managed export or real split-count report has been fabricated.

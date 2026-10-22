@@ -51,6 +51,10 @@ class SignatureSession:
             "text", "interpreter_text", "interpreter_transcript"})))
         if key not in self.records:
             self.records[key] = record_signature(record, verify_assets, self.hashes)
+        elif verify_assets:
+            self.hashes.hash(record.pose_path)
+            if record.timestamps_path:
+                self.hashes.hash(record.timestamps_path)
         return self.records[key]
 
 

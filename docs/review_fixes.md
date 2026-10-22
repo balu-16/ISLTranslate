@@ -29,3 +29,10 @@ Corrections applied to the proposed plan: candidate source mappings require evid
 | P3-3 | Shared validation-selection identity checks now serve evaluate/predict/benchmark/diagnostics. All expose --decoding; averaged weights and changed generation policies require the matching checkpoint checksum, validation hash and effective generation hash. |
 | P3-4 | Resume binds source hash, Git commit/dirty state, Python/platform, actual package inventory and lock/pyproject hashes. --allow-code-change records only code transitions and never bypasses environment/data/numerical incompatibility. Legacy unbound resumes fail explicitly. |
 | P3-5 | Update logs include group LRs, measured synchronized update time, examples/frames throughput and peak allocated GPU bytes; epochs separate training/validation time. summarize_run.py reports actual measurements/checkpoint sizes, leaving unmeasured values null. |
+| P3-6 | Updated guides, directory READMEs and the preview-only notebook for the corrected data/cache/environment/decoding workflow. Documented RGB slot masks, feature-only noise and declarative repeat/bootstrap fields. Integration checks bind evaluation statistics/RGB identities, memoize RGB hashing and preserve cache identity across verification modes. |
+
+## Acceptance still pending
+
+No tests or numerical/model code have run. Future CPU setup: uv lock; uv sync --locked --extra cpu --extra dev; uv run --no-sync pytest. Follow the runbook for real-header/source-map/archive-sample verification, small-subset fitting and baseline measurements only when execution is authorized. No source counts, cache size estimates, backend stability, exact-resume equivalence or scores are fabricated.
+
+The specification's pip mode is replaced with uv-managed installation; its automatic regex verification and warn-only determinism are not adopted. Per-second velocity remains the baseline. The proposed two-word BLEU test is replaced by a four-token corpus fixture. Full data/environment compatibility is never bypassed by a code override.
