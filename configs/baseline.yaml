@@ -36,6 +36,7 @@ data:
   original_splits_csv: null
   workers: 0
 features:
+  velocity: true
   schema_version: upper-hands-v1
   person_index: null
   confidence_thresholds: {POSE_LANDMARKS: 0.5}

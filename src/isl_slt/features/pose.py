@@ -113,6 +113,10 @@ def prepare_pose(sequence: PoseSequence, settings: Features, context_enabled: bo
     validity = [np.repeat(position_valid, 2, axis=1), np.repeat(velocity_valid, 2, axis=1),
                 *[np.zeros_like(observed) for _ in range(4)]]
     continuous = [True, True, False, False, False, False]
+    if not settings.velocity:
+        blocks = [blocks[index] for index in (0, 2, 3, 4)]
+        validity = [validity[index] for index in (0, 2, 3, 4)]
+        continuous = [True, False, False, False]
     if settings.local_hands:
         for start in (6, 27):
             local_valid = position_valid[:, start:start + 21] & position_valid[:, start:start + 1]
