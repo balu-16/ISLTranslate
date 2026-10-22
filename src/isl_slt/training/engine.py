@@ -232,6 +232,7 @@ def run_training(config: Config, resume: str | None = None) -> dict:
             "tokenizer": tokenizer_bundle, "lexicon": lexical_payload,
             "t5_config": model.t5.config.to_dict() if hasattr(model, "t5") else None,
             "input_dim": input_dim, "initializer": asset, "versions": package_versions,
+            "feature_statistics": datasets["target"].statistics,
             "runtime_backend": backend,
             "rgb_initializer": rgb_initializer,
             "parameter_counts": {"total": sum(p.numel() for p in model.parameters()),

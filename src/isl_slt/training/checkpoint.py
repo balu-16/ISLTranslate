@@ -7,6 +7,7 @@ import torch
 from isl_slt.config import Config
 from isl_slt.features.cache import preprocessing_fingerprint
 from isl_slt.utils.io import atomic_open, file_hash, fingerprint
+from isl_slt.features.statistics import load_statistics
 
 
 def bundle_tokenizer(directory: str | Path) -> dict[str, bytes]:
@@ -34,7 +35,9 @@ def restore_tokenizer(bundle: dict[str, bytes], directory: str | Path) -> Path:
 def compatibility(config: Config, input_dim: int, split_metadata: dict, tokenizer: dict,
                   lexicon: dict | None, rgb_initializer: dict | None = None,
                   feature_artifacts: dict | None = None) -> dict:
-    return {"architecture": fingerprint({"model": config.model.model_dump(mode="json"), "input_dim": input_dim,
+    statistics = load_statistics(config, split_metadata["hashes"]["train"])
+    return {"statistics": statistics["signature"] if statistics else None,
+            "architecture": fingerprint({"model": config.model.model_dump(mode="json"), "input_dim": input_dim,
                                          "rgb": config.rgb.model_dump(mode="json")}),
             "feature_schema": preprocessing_fingerprint(config), "split_hashes": split_metadata["hashes"],
             "protocol": split_metadata["protocol"], "tokenizer": tokenizer_hash(tokenizer),

@@ -55,6 +55,8 @@ class Data(Strict):
 
 class Features(Strict):
     component_names: dict[str, str] = Field(default_factory=dict)  # canonical -> stored header name
+    standardize: bool = False
+    statistics_path: str = "artifacts/stats/pose.json"
     schema_version: str = "upper-hands-v1"
     person_index: int | None = Field(default=None, ge=0)
     confidence_thresholds: dict[str, float] = Field(default_factory=lambda: {"POSE_LANDMARKS": 0.5})

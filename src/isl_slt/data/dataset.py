@@ -14,6 +14,7 @@ from isl_slt.data.manifests import Record
 from isl_slt.data.pose import read_pose
 from isl_slt.features.cache import read_features
 from isl_slt.features.pose import resample_sequence
+from isl_slt.features.statistics import apply_statistics, load_statistics
 from isl_slt.utils.io import file_hash, fingerprint, read_json
 
 
@@ -34,6 +35,7 @@ class PoseDataset(Dataset):
                  training: bool = False, preflight: bool = True, context_records: list[Record] | None = None):
         self.records, self.config, self.lexicon, self.training = records, config, lexicon, training
         self.epoch = 0
+        self.statistics = load_statistics(config)
         self.context_records = context_records if context_records is not None else records
         self.lengths, self.input_dim, cache_identities, video_hashes = [], None, [], {}
         for record in records:
@@ -68,7 +70,7 @@ class PoseDataset(Dataset):
     def __getitem__(self, index: int) -> dict:
         record = self.records[index]
         prepared = read_features(self.config, record, verify_assets=False)
-        features = torch.from_numpy(prepared.values)
+        features = torch.from_numpy(apply_statistics(prepared, self.statistics))
         generator = torch.Generator().manual_seed(self.config.training.seed + self.epoch * 1000003 + index)
         if self.training and self.config.training.pose_noise_std:
             # Only observed position channels receive small noise; masks and RGB vectors are untouched.

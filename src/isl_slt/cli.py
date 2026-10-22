@@ -12,7 +12,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="isl_slt", description="Auditable continuous ISL translation")
     commands = result.add_subparsers(dest="command", required=True)
     for name in ("plan", "env-check", "audit", "split", "check-leakage", "prepare-features", "prepare-model",
-                 "prepare-rgb", "train", "overfit", "evaluate", "predict", "diagnostics", "benchmark", "make-source-map"):
+                 "prepare-rgb", "prepare-stats", "train", "overfit", "evaluate", "predict", "diagnostics", "benchmark", "make-source-map"):
         sub = commands.add_parser(name)
         sub.add_argument("--config", required=True)
         sub.add_argument("--dry-run", action="store_true", help="Print resolved plan without loading data/models")
@@ -70,6 +70,9 @@ def dispatch(args) -> dict | list:
         if command == "plan" or args.dry_run:
             from isl_slt.workflows import planned_experiment
             return {"command": command, **planned_experiment(config)}
+    if command == "prepare-stats":
+        from isl_slt.features.statistics import prepare_stats
+        return prepare_stats(config)
     if command == "make-source-map":
         from isl_slt.workflows import make_source_map
         return make_source_map(config, args.out, args.dataset)

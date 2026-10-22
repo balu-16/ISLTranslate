@@ -9,7 +9,7 @@ from isl_slt.data.manifests import Record
 from isl_slt.features.pose import Prepared
 from isl_slt.utils.io import atomic_open, file_hash, fingerprint, read_json, versions, write_json
 
-CACHE_VERSION = "pose-feature-cache-v1"
+CACHE_VERSION = "pose-feature-cache-v2"
 
 
 def preprocessing_fingerprint(config: Config) -> str:
@@ -48,7 +48,7 @@ def write_features(config: Config, record: Record, prepared: Prepared, dependenc
     with atomic_open(arrays_path) as stream:
         np.savez_compressed(stream, values=prepared.values, times=prepared.times, observed=prepared.observed,
             imputed=prepared.imputed, position_valid=prepared.position_valid, velocity_valid=prepared.velocity_valid,
-            regions=prepared.regions, segments=prepared.segments)
+            regions=prepared.regions, segments=prepared.segments, continuous_valid=prepared.continuous_valid)
     metadata["arrays_sha256"] = file_hash(arrays_path)
     write_json(metadata_path, metadata)
     return metadata
@@ -69,5 +69,5 @@ def read_features(config: Config, record: Record, dependencies: list[Record] | N
             raise ValueError(f"{record.uid}: source assets/metadata changed; regenerate features")
     with np.load(arrays_path, allow_pickle=False) as arrays:
         return Prepared(**{name: arrays[name].copy() for name in (
-            "values", "times", "observed", "imputed", "position_valid", "velocity_valid", "regions", "segments")},
+            "values", "times", "observed", "imputed", "position_valid", "velocity_valid", "regions", "segments", "continuous_valid")},
             metadata=metadata)

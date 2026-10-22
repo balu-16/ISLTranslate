@@ -11,6 +11,7 @@ from isl_slt.data.dataset import Collator, raw_sequence
 from isl_slt.data.manifests import Record
 from isl_slt.evaluation.generation import decode_tokens
 from isl_slt.features.pose import prepare_pose
+from isl_slt.features.statistics import apply_statistics, validate_statistics
 from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import load_checkpoint, restore_tokenizer
 from isl_slt.utils.io import file_hash
@@ -49,6 +50,10 @@ class Predictor:
     @classmethod
     def from_checkpoint(cls, checkpoint_path: str, runtime: Runtime | None = None):
         payload = load_checkpoint(checkpoint_path)
+        if payload.get("feature_statistics"):
+            validate_statistics(payload["feature_statistics"])
+            if payload["compatibility"].get("statistics") != payload["feature_statistics"]["signature"]:
+                raise ValueError("Checkpoint feature statistics mismatch")
         config = Config.model_validate(payload["config"])
         if runtime is not None:
             config = config.model_copy(update={"runtime": runtime})
@@ -72,7 +77,7 @@ class Predictor:
             prepared = prepare_pose(sequence, self.config.features, self.config.context.enabled)
             if prepared.values.shape[1] != self.model.visual.cnn.convolutions[0].in_channels:
                 raise ValueError("Inference features do not match checkpoint input schema")
-            item = {"features": torch.from_numpy(prepared.values), "record": record}
+            item = {"features": torch.from_numpy(apply_statistics(prepared, self.checkpoint.get("feature_statistics"))), "record": record}
             if self.config.rgb.mode != "off":
                 from isl_slt.features.rgb import RGBEncoder, load_crops
                 images, mask = load_crops(record, records, sequence, self.config)
