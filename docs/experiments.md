@@ -63,7 +63,7 @@ uv run --no-sync python -m isl_slt train --config configs/transfer.yaml
 
 The configured chronology is generic T5 initialization → one frozen-adapter pretrain epoch → four joint pretrain epochs → up to 20 target epochs. This continues the model within one staged run rather than assuming a task-specific external checkpoint is uncontaminated.
 
-The transfer split directory is separate, but its target memberships must match the baseline comparison. Inspect hashes and the filter report. All target UIDs, held-out target parents, unresolved identities and available content duplicates are excluded from the extra pool. Missing duplicate-detection coverage remains a documented limitation.
+The transfer split directory is separate, but its target memberships must match the baseline comparison. Inspect hashes and the filter report. Every target parent (including training), target UID, unresolved identity, known content duplicate and normalized-text duplicate is excluded from the extra pool. Acquisition selects eligible whole source groups with an explicit compressed-byte budget and seed. Missing duplicate-detection coverage remains a documented limitation.
 
 ## Verified context
 
@@ -113,7 +113,7 @@ No target BLEU value is an acceptance threshold or guaranteed result. Outcomes, 
 
 `standardized.yaml` enables valid continuous-channel standardization: prepare its features, run `prepare-stats`, then train using the same config. Statistics use immutable target-training records only and travel with the checkpoint. Binary masks and invalid/padded zeros retain their meaning.
 
-`velocity.yaml` names the unchanged per-second velocity representation. `no_velocity.yaml` removes motion values plus their validity channels, reducing 384 channels to 240. The original baseline is not silently replaced by an undocumented v7 design.
+The baseline already enables per-second velocity, so the redundant velocity-enabled preset has been removed. `no_velocity.yaml` removes motion values plus their validity channels, reducing 384 channels to 240. The original baseline is not silently replaced by an undocumented v7 design.
 
 `overfit.yaml` is the separate unregularized diagnostic preset; it is never a held-out-quality result. Worker count/mixed precision/standardization need actual measurements before any efficiency or quality claim.
 

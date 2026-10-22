@@ -2,7 +2,7 @@
 
 The baseline is pose → temporal CNN → two-layer BiLSTM → FLAN-T5-small, trained with translation cross-entropy. Optional experiments use explicit configurations.
 
-**Execution remains pending.** No dependencies, datasets or model weights have been installed/downloaded; tests, notebook cells and training have not been run. No numerical results or BLEU guarantees are claimed.
+The [supplied final review](ISL_Final_Review.md) reports 48 passing tests, real-CSV checks and synthetic CPU execution at commit `2dd30be`. This implementation round has performed static inspection only; new tests/fixes, real-pose behavior and AMD compatibility remain unverified. No research scores or BLEU guarantees are claimed.
 
 | Guide | Contents |
 | --- | --- |

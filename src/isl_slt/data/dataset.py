@@ -16,7 +16,7 @@ from isl_slt.data.pose import read_pose
 from isl_slt.features.cache import SignatureSession, cache_paths, read_features
 from isl_slt.features.pose import resample_sequence
 from isl_slt.features.statistics import apply_statistics, load_statistics
-from isl_slt.utils.io import file_hash, fingerprint, read_json
+from isl_slt.utils.io import fingerprint, read_json
 
 
 def dependencies_for(record: Record, records: list[Record], config: Config) -> list[Record]:

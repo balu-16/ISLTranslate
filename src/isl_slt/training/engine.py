@@ -18,7 +18,7 @@ from isl_slt.evaluation.generation import select_decoding
 from isl_slt.losses.objectives import loss_for_window, window_denominators
 from isl_slt.models.factory import build_model, load_tokenizer
 from isl_slt.training.checkpoint import bundle_tokenizer, compatibility, load_checkpoint, restore_tokenizer, save_checkpoint
-from isl_slt.training.checkpoint import guarded_improvement, inference_payload, publish_snapshots, validate_resume_compatibility
+from isl_slt.training.checkpoint import guarded_improvement, publish_snapshots, validate_resume_compatibility
 from isl_slt.utils.io import append_event, directory_lock, file_hash, read_json, versions, write_json, write_jsonl
 from isl_slt.utils.runtime import Budget, autocast, device_for, restore_rng, rng_state, seed_everything, synchronize
 

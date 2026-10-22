@@ -1,6 +1,6 @@
 # Architecture and engineering decisions
 
-The default experiment translates complete pose sequences into English using translation cross-entropy. It uses a temporal CNN, a two-layer bidirectional LSTM and the full generic FLAN-T5-small encoder-decoder. Optional components require explicit configuration. These are implementation descriptions; numerical correctness and translation quality have not been established by execution.
+The default experiment translates complete pose sequences into English using translation cross-entropy. It uses a temporal CNN, a two-layer bidirectional LSTM and the full generic FLAN-T5-small encoder-decoder. Optional components require explicit configuration. The reviewer reports synthetic CPU validation at `2dd30be`; new changes remain unexecuted and real-pose translation quality remains unknown.
 
 ## Data path
 

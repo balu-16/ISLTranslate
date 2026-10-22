@@ -1,6 +1,6 @@
 # Preparation, training and evaluation runbook
 
-All commands here are for the future execution phase and have not been run. They assume the repository root as the working directory. Use uv for setup and execution. This guide follows the retained configurations; the complete common settings now live in `configs/baseline.yaml`.
+Commands here are for future execution of the revised code; the supplied final review separately reports earlier synthetic/CSV validation at `2dd30be`. They assume the repository root as the working directory. Use uv for setup and execution. This guide follows the retained configurations; the complete common settings now live in `configs/baseline.yaml`.
 
 ## 1. Supply inputs and configure paths
 
@@ -22,7 +22,7 @@ uv run --no-sync pytest -m slow
 # Create .env from .env.example only if it does not already exist.
 ```
 
-Populate local credentials/resource paths as needed. No lockfile was fabricated during implementation. Subsequent commands use `--no-sync` so they do not implicitly install or change dependencies. One optional runner notebook and an offline CPU pytest suite are available. Tests have not been run and their duration remains unmeasured.
+Populate local credentials/resource paths as needed. No lockfile was fabricated during implementation. Subsequent commands use `--no-sync` so they do not implicitly install or change dependencies. One optional runner notebook and an offline CPU pytest suite are available. The reviewer reports 48 original cases passing; newly added tests have not been run and their duration remains unmeasured.
 
 ### AMD and backend selection
 

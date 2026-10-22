@@ -1,4 +1,0 @@
-extends: baseline.yaml
-experiment: velocity-per-second
-run_dir: runs/velocity-per-second
-features: {velocity: true}

@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from isl_slt.utils.io import atomic_open, file_hash
+from isl_slt.utils.io import atomic_open
 
 
 class SafeRedirect(HTTPRedirectHandler):
