@@ -1,0 +1,6 @@
+extends: s2-plain.yaml
+experiment: r2-strong
+run_dir: runs/r2-strong
+runtime: {determinism_mode: warn}
+model: {decoder: lstm, bpe_vocab_size: 4000, dropout: 0.2, word_dropout: 0.3, rank_weight: 1.0, rank_margin: 0.5}
+

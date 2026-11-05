@@ -1,0 +1,4 @@
+extends: amd_fp32.yaml
+experiment: stats-amd
+run_dir: runs/stats-amd
+features: {standardize: true, statistics_path: artifacts/stats/standardized.json}

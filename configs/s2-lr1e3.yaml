@@ -1,0 +1,4 @@
+extends: s2a.yaml
+experiment: s2-lr1e3
+run_dir: runs/s2-lr1e3
+training: {lr_new_layers: 0.001}

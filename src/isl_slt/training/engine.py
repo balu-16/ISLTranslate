@@ -73,10 +73,10 @@ class StageScheduler:
     """A new cosine schedule per explicit stage; optimizer moments survive transitions."""
     def __init__(self, optimizer, warmup_ratio: float):
         self.optimizer, self.warmup_ratio = optimizer, warmup_ratio
-        self.stage, self.completed, self.total, self.warmup = None, 0, 1, 0
+        self.stage, self.completed, self.total, self.warmup, self.scale = None, 0, 1, 0, 1.0
 
-    def configure(self, name: str, total: int) -> None:
-        self.stage, self.completed, self.total = name, 0, max(total, 1)
+    def configure(self, name: str, total: int, scale: float = 1.0) -> None:
+        self.stage, self.completed, self.total, self.scale = name, 0, max(total, 1), scale
         self.warmup = math.ceil(self.total * self.warmup_ratio)
         self.apply()
 
@@ -88,14 +88,14 @@ class StageScheduler:
             progress = (self.completed - self.warmup) / max(self.total - self.warmup, 1)
             factor = (1 + math.cos(math.pi * min(max(progress, 0), 1))) / 2
         for group in self.optimizer.param_groups:
-            group["lr"] = group["base_lr"] * factor
+            group["lr"] = group["base_lr"] * factor * self.scale
 
     def step(self) -> None:
         self.completed += 1
         self.apply()
 
     def state_dict(self):
-        return {key: getattr(self, key) for key in ("stage", "completed", "total", "warmup", "warmup_ratio")}
+        return {key: getattr(self, key) for key in ("stage", "completed", "total", "warmup", "warmup_ratio", "scale")}
 
     def load_state_dict(self, state):
         for key, value in state.items():
@@ -123,7 +123,8 @@ def update_window(model, optimizer, scheduler, scaler, batches, config: Config, 
         moved = batch.to(device)
         with autocast(config.runtime, device):
             output = model(labels=moved.labels, **moved.visual)
-            loss, components = loss_for_window(output, moved, token_count, lexical_count, weight)
+            loss, components = loss_for_window(output, moved, token_count, lexical_count, weight,
+                                                 config.training.label_smoothing, config.training.ce_weight)
         if not bool(torch.isfinite(loss)):
             optimizer.zero_grad(set_to_none=True)
             return {"updated": False, "reason": "nonfinite_loss"}
@@ -321,7 +322,7 @@ def _run_training(config: Config, resume: str | None = None, allow_code_change: 
                 dataset.epoch = state["global_epoch"] + epoch
                 _, sampler = loader_for(dataset, tokenizer, config, training=True)
                 steps += sampler.updates(config.training.gradient_accumulation_steps)
-            scheduler.configure(stage.name, steps)
+            scheduler.configure(stage.name, steps, stage.lr_scale)
             if stage.dataset == "target" and stage_index and config.training.stages[stage_index - 1].dataset == "pretrain":
                 state.update(best_bleu=-1.0, best_chrf=-1.0, bad_epochs=0)
         for epoch in range(state["epoch_in_stage"], stage.epochs):

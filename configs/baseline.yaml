@@ -3,10 +3,10 @@ experiment: baseline
 run_dir: runs/baseline
 data:
   target:
-    annotations: data/raw/ISLTranslate.csv
+    annotations: data/raw/ISLTranslate.available.csv
     dataset_name: isltranslate
-    dataset_revision: REQUIRED
-    annotation_revision: original
+    dataset_revision: e4ee6c5f0d9dfcbc74205e3f1388ce94da26c298
+    annotation_revision: isign-v1.1-pose-available
     columns: {uid: [uid], text: [text]}
     pose_root: data/raw/poses
     video_root: null

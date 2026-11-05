@@ -1,0 +1,17 @@
+extends: r5-rich.yaml
+experiment: r6-t5joint-rand
+run_dir: runs/r6-t5joint-rand
+data: {workers: 3, split_dir: splits/random-v1}
+runtime: {device: cuda, determinism_mode: warn, wall_time_seconds: 50400}
+features: {standardize: true, statistics_path: artifacts/stats/rich.json, local_hands: true, bones: true, face: true}
+lexical: {weight: 0.1, ramp_epochs: 0, max_vocabulary: 1000}
+model: {decoder: t5, t5_repo: google/flan-t5-small, t5_dir: artifacts/models/flan-t5-small, dropout: 0.3, lstm_dropout: 0.0}
+training:
+  lr_new_layers: 0.0003
+  lr_t5: 0.00003
+  max_target_epochs: 50
+  early_stopping_patience: 10
+  retain_epoch_checkpoints: 15
+  stages:
+    - {name: t5-adapter, dataset: target, epochs: 8, freeze_t5: true, tune_rgb: false}
+    - {name: t5-joint, dataset: target, epochs: 42, freeze_t5: false, tune_rgb: false}

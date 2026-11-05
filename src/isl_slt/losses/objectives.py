@@ -4,9 +4,9 @@ import torch
 import torch.nn.functional as F
 
 
-def translation_sum(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+def translation_sum(logits: torch.Tensor, labels: torch.Tensor, label_smoothing: float = 0.0) -> torch.Tensor:
     return F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), labels.reshape(-1),
-                           ignore_index=-100, reduction="sum")
+                           ignore_index=-100, reduction="sum", label_smoothing=label_smoothing)
 
 
 def lexical_sum(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -21,12 +21,17 @@ def window_denominators(batches) -> tuple[int, int]:
     return tokens, lexical
 
 
-def loss_for_window(output: dict, batch, token_count: int, lexical_count: int, weight: float):
-    ce = translation_sum(output["logits"], batch.labels)
+def loss_for_window(output: dict, batch, token_count: int, lexical_count: int, weight: float,
+                    label_smoothing: float = 0.0, ce_weight: float = 1.0):
+    ce = translation_sum(output["logits"], batch.labels, label_smoothing)
     auxiliary = ce.new_zeros(())
     if weight:
         if output["lexical_logits"] is None or batch.lexical is None or lexical_count == 0:
             raise ValueError("Enabled lexical objective lacks head or labels")
         auxiliary = lexical_sum(output["lexical_logits"], batch.lexical)
-    loss = ce / token_count + weight * auxiliary / max(lexical_count, 1)
+    loss = ce_weight * ce / token_count + weight * auxiliary / max(lexical_count, 1)
+    if output.get("ctc_sum") is not None:
+        loss = loss + output["ctc_sum"] / token_count
+    if output.get("rank_mean") is not None:
+        loss = loss + output["rank_mean"] * (int((batch.labels != -100).sum()) / token_count)
     return loss, {"ce_sum": float(ce.detach()), "lexical_sum": float(auxiliary.detach())}

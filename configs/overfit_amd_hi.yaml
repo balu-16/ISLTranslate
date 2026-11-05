@@ -1,0 +1,9 @@
+extends: overfit_amd.yaml
+experiment: overfit-amd-hi
+run_dir: runs/overfit-amd-hi
+training:
+  lr_new_layers: 0.001
+  lr_t5: 0.0003
+  max_target_epochs: 60
+  stages:
+    - {name: overfit-unfrozen, dataset: target, epochs: 60, freeze_t5: false, tune_rgb: false}

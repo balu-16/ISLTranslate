@@ -1,0 +1,5 @@
+extends: amd_fp32.yaml
+experiment: rich-stats
+run_dir: runs/rich-stats
+data: {workers: 6}
+features: {standardize: true, statistics_path: artifacts/stats/rich.json, local_hands: true, bones: true, face: true}

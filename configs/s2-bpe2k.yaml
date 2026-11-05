@@ -1,0 +1,4 @@
+extends: s2a.yaml
+experiment: s2-bpe2k
+run_dir: runs/s2-bpe2k
+model: {decoder: lstm, bpe_vocab_size: 2000, dropout: 0.3}

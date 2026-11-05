@@ -1,0 +1,4 @@
+extends: s2a.yaml
+experiment: s2-bow
+run_dir: runs/s2-bow
+lexical: {weight: 0.05, ramp_epochs: 0}

@@ -1,0 +1,5 @@
+extends: s2-plain.yaml
+experiment: w-both
+run_dir: runs/w-both
+runtime: {determinism_mode: warn}
+model: {decoder: lstm, bpe_vocab_size: 4000, dropout: 0.2, word_dropout: 0.3, ctc_weight: 0.3}

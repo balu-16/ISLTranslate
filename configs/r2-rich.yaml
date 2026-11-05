@@ -1,0 +1,6 @@
+extends: s2-plain.yaml
+experiment: r2-rich
+run_dir: runs/r2-rich
+runtime: {determinism_mode: warn}
+model: {decoder: lstm, bpe_vocab_size: 4000, dropout: 0.2, word_dropout: 0.3, rank_weight: 0.5, rank_margin: 0.2}
+features: {standardize: true, statistics_path: artifacts/stats/rich.json, local_hands: true, bones: true, face: true}

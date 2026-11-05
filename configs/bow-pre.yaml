@@ -1,0 +1,14 @@
+extends: s2-plain.yaml
+experiment: bow-pre
+run_dir: runs/bow-pre
+runtime: {determinism_mode: warn}
+model: {decoder: lstm, bpe_vocab_size: 4000, dropout: 0.2}
+features: {standardize: true, statistics_path: artifacts/stats/rich.json, local_hands: true, bones: true, face: true}
+lexical: {weight: 1.0, ramp_epochs: 0, max_vocabulary: 1000}
+training:
+  ce_weight: 0.0
+  max_target_epochs: 6
+  early_stopping_patience: 10
+  stages:
+    - {name: bow-pretrain, dataset: target, epochs: 6, freeze_t5: false, tune_rgb: false}
+generation: {train_beams: [1], beams: [1], length_penalty: 1.0, max_new_tokens: 32}

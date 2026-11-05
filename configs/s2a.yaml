@@ -1,0 +1,15 @@
+extends: amd_fp32.yaml
+experiment: s2a
+run_dir: runs/s2a
+data: {workers: 3}
+features: {standardize: true, statistics_path: artifacts/stats/standardized.json}
+model: {decoder: lstm, bpe_vocab_size: 4000, dropout: 0.3}
+training:
+  lr_new_layers: 0.0005
+  label_smoothing: 0.05
+  pose_noise_std: 0.005
+  max_target_epochs: 40
+  early_stopping_patience: 6
+  stages:
+    - {name: lstm-joint, dataset: target, epochs: 40, freeze_t5: false, tune_rgb: false}
+generation: {train_beams: [1], beams: [1, 4], length_penalty: 1.0, max_new_tokens: 128}

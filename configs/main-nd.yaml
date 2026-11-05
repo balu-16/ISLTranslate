@@ -1,0 +1,12 @@
+extends: s2-plain.yaml
+experiment: main-nd
+run_dir: runs/main-nd
+runtime: {determinism_mode: warn}
+model: {decoder: lstm, bpe_vocab_size: 4000, dropout: 0.0}
+training:
+  label_smoothing: 0.05
+  max_target_epochs: 35
+  early_stopping_patience: 7
+  stages:
+    - {name: lstm-joint, dataset: target, epochs: 35, freeze_t5: false, tune_rgb: false}
+generation: {train_beams: [1], beams: [1, 4], length_penalty: 1.0, max_new_tokens: 128}

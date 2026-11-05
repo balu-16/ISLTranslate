@@ -1,0 +1,13 @@
+extends: r5-rich.yaml
+experiment: r4-bow-rand
+run_dir: runs/r4-bow-rand
+data: {workers: 3, split_dir: splits/random-v1}
+runtime: {device: cuda, determinism_mode: warn, wall_time_seconds: 50400}
+features: {standardize: true, statistics_path: artifacts/stats/rich.json, local_hands: true, bones: true, face: true}
+lexical: {weight: 0.1, ramp_epochs: 0, max_vocabulary: 1000}
+training:
+  max_target_epochs: 70
+  early_stopping_patience: 15
+  retain_epoch_checkpoints: 20
+  stages:
+    - {name: lstm-joint, dataset: target, epochs: 70, freeze_t5: false, tune_rgb: false}

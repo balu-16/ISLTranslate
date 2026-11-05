@@ -1,0 +1,11 @@
+extends: overfit.yaml
+experiment: overfit-amd
+run_dir: runs/overfit-amd
+data:
+  workers: 8
+runtime:
+  device: cuda
+  precision: fp32
+  recurrent_fp32: true
+  deterministic: true
+  determinism_mode: strict

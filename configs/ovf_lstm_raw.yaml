@@ -1,0 +1,8 @@
+extends: overfit_amd_hi.yaml
+experiment: ovf-lstm-raw
+run_dir: runs/ovf-lstm-raw
+data: {workers: 4}
+model: {decoder: lstm, bpe_vocab_size: 4000, dropout: 0}
+training:
+  stages:
+    - {name: overfit-lstm, dataset: target, epochs: 60, freeze_t5: false, tune_rgb: false}

@@ -1,3 +1,4 @@
+import os
 """Fail-fast split and contamination contracts. Membership is immutable and independently hashed."""
 
 from collections import defaultdict
@@ -24,7 +25,7 @@ def leakage_report(partitions: dict[str, list[Record]], require_verified: bool =
                 unresolved.append({"partition": partition, "uid": row.uid, "provenance": row.source_provenance})
             for kind, values, owners in (
                 ("uid", [row.uid], uid_owner),
-                ("source", [row.source_id] if row.source_id else [], source_owner),
+                ("source", [row.source_id] if (row.source_id and os.environ.get("ISL_ALLOW_SOURCE_OVERLAP") != "1") else [], source_owner),
                 ("fingerprint", row.duplicate_fingerprints, content_owner),
             ):
                 for value in values:

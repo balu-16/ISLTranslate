@@ -1,0 +1,5 @@
+extends: s2-plain.yaml
+experiment: w-ctc
+run_dir: runs/w-ctc
+runtime: {determinism_mode: warn}
+model: {decoder: lstm, bpe_vocab_size: 4000, dropout: 0.2, ctc_weight: 0.3}

@@ -1,0 +1,4 @@
+extends: ovf_lstm_std.yaml
+experiment: ovf-lstm-std-bow
+run_dir: runs/ovf-lstm-std-bow
+lexical: {weight: 0.1, ramp_epochs: 3, method: regex, gradient_diagnostics: true}

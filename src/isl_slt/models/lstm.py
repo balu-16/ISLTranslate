@@ -8,7 +8,9 @@ from isl_slt.models.encoders import VisualEncoder, masked_mean
 
 class AttentionLSTM(nn.Module):
     def __init__(self, encoder: VisualEncoder, vocabulary: int, hidden: int, embedding: int,
-                 dropout: float, lexical_size: int = 0):
+                 dropout: float, lexical_size: int = 0,
+                 word_dropout: float = 0.0, ctc_weight: float = 0.0,
+                 rank_weight: float = 0.0, rank_margin: float = 0.2):
         super().__init__()
         self.visual = encoder
         self.embedding = nn.Embedding(vocabulary, embedding, padding_idx=0)
@@ -20,6 +22,9 @@ class AttentionLSTM(nn.Module):
         self.output = nn.Linear(hidden + encoder.output_dim, vocabulary)
         self.dropout = nn.Dropout(dropout)
         self.lexical_head = nn.Linear(encoder.output_dim, lexical_size) if lexical_size else None
+        self.word_dropout, self.ctc_weight = word_dropout, ctc_weight
+        self.ctc_head = nn.Linear(encoder.output_dim, vocabulary) if ctc_weight else None
+        self.rank_weight, self.rank_margin = rank_weight, rank_margin
 
     def step(self, token, state, memory, keys, mask):
         hidden, cell = state
@@ -37,17 +42,55 @@ class AttentionLSTM(nn.Module):
         hidden = torch.tanh(self.initial(masked_mean(memory, mask)))
         return hidden.float(), torch.zeros_like(hidden).float()
 
+    def _decode(self, memory, mask, inputs, steps):
+        keys, state = self.key(memory), self.initialize(memory, mask)
+        logits = []
+        for index in range(steps):
+            output, state = self.step(inputs[:, index], state, memory, keys, mask)
+            logits.append(output)
+        return torch.stack(logits, 1)
+
     def forward(self, *, labels: torch.Tensor, **visual):
         memory, mask = self.visual(**visual)
-        keys, state = self.key(memory), self.initialize(memory, mask)
-        previous = torch.full((len(memory),), 2, dtype=torch.long, device=memory.device)
-        logits = []
-        for index in range(labels.shape[1]):
-            output, state = self.step(previous, state, memory, keys, mask)
-            logits.append(output)
-            previous = labels[:, index].masked_fill(labels[:, index] == -100, 0)
+        start = torch.full((len(memory), 1), 2, dtype=torch.long, device=memory.device)
+        previous = labels[:, :-1].masked_fill(labels[:, :-1] == -100, 0)
+        if self.training and self.word_dropout:
+            drop = torch.rand(previous.shape, device=previous.device) < self.word_dropout
+            previous = previous.masked_fill(drop & (previous > 3), 1)
+        inputs = torch.cat([start, previous], 1)
+        stacked = self._decode(memory, mask, inputs, labels.shape[1])
+        rank = None
+        if self.training and self.rank_weight and len(memory) > 1:
+            # Conditional ranking: gold text must be likelier under its own video than another clip's.
+            # Length-matched negative: pair each clip with its nearest-length neighbour so the
+            # decoder cannot win the ranking by checking text length against video length.
+            count = len(memory)
+            ranked = torch.argsort(mask.sum(1))
+            partner = torch.arange(count, device=memory.device) ^ 1
+            partner[partner >= count] = count - 2
+            order = torch.empty_like(ranked)
+            order[ranked] = ranked[partner]
+            negative = self._decode(memory[order], mask[order], inputs, labels.shape[1])
+            valid = (labels != -100).float()
+            def nll(lg):
+                tok = torch.nn.functional.cross_entropy(lg.float().transpose(1, 2), labels, ignore_index=-100,
+                                                        reduction="none")
+                return (tok * valid).sum(1) / valid.sum(1).clamp(min=1)
+            real, shuf = nll(stacked), nll(negative)
+            rank = self.rank_weight * torch.relu(self.rank_margin + real - shuf).mean()
         lexical = self.lexical_head(masked_mean(memory, mask)) if self.lexical_head is not None else None
-        return {"logits": torch.stack(logits, 1), "lexical_logits": lexical}
+        result = {"logits": stacked, "lexical_logits": lexical}
+        if rank is not None:
+            result["rank_mean"] = rank
+        if self.ctc_head is not None and self.training:
+            log_probs = self.ctc_head(memory).float().log_softmax(-1).transpose(0, 1)
+            valid = labels != -100
+            targets = labels[valid & (labels > 3)]
+            target_lengths = (valid & (labels > 3)).sum(1)
+            ctc = torch.nn.functional.ctc_loss(log_probs, targets, mask.sum(1), target_lengths, blank=0,
+                                               reduction="sum", zero_infinity=True)
+            result["ctc_sum"] = self.ctc_weight * ctc
+        return result
 
     @torch.no_grad()
     def generate(self, *, beams: int, max_new_tokens: int, length_penalty: float, **visual):

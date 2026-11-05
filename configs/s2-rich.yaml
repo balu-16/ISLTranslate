@@ -1,0 +1,4 @@
+extends: s2a.yaml
+experiment: s2-rich
+run_dir: runs/s2-rich
+features: {standardize: true, statistics_path: artifacts/stats/rich.json, local_hands: true, bones: true, face: true}

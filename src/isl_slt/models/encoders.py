@@ -53,7 +53,8 @@ class VisualEncoder(nn.Module):
         else:
             self.rgb_projection = None
         self.recurrent = nn.LSTM(fusion_dim, model.lstm_hidden, num_layers=model.lstm_layers,
-                                 batch_first=True, bidirectional=True, dropout=model.dropout)
+                                 batch_first=True, bidirectional=True,
+                                 dropout=model.dropout if model.lstm_dropout is None else model.lstm_dropout)
         self.norm = nn.LayerNorm(model.lstm_hidden * 2)
         self.dropout = nn.Dropout(model.dropout)
         self.output_dim = model.lstm_hidden * 2

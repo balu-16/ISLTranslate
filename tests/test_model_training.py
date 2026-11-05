@@ -119,3 +119,24 @@ def test_two_window_resume_matches_uninterrupted(tmp_path):
     for name, value in resumed.state_dict().items():
         torch.testing.assert_close(value, expected[name], rtol=0, atol=0)
     assert resumed_schedule.state_dict() == schedule.state_dict()
+
+
+def test_label_smoothing_default_is_plain_ce_and_ignores_padding():
+    torch.manual_seed(0)
+    logits = torch.randn(2, 5, 11)
+    labels = torch.randint(0, 11, (2, 5))
+    labels[1, 3:] = -100
+    plain = torch.nn.functional.cross_entropy(logits.reshape(-1, 11), labels.reshape(-1), ignore_index=-100, reduction="sum")
+    assert torch.allclose(translation_sum(logits, labels), plain)
+    smooth = translation_sum(logits, labels, 0.1)
+    valid = labels != -100
+    manual = torch.nn.functional.cross_entropy(logits[valid], labels[valid], reduction="sum", label_smoothing=0.1)
+    assert torch.allclose(smooth, manual)
+    assert not torch.allclose(smooth, plain)
+
+
+def test_label_smoothing_config_bounds():
+    config = Config()
+    assert config.training.label_smoothing == 0
+    with pytest.raises(Exception):
+        Config.model_validate({**config.model_dump(), "training": {**config.training.model_dump(), "label_smoothing": 1.0}})

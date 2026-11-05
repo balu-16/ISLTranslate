@@ -1,0 +1,4 @@
+extends: ovf_lstm_raw.yaml
+experiment: ovf-lstm-std
+run_dir: runs/ovf-lstm-std
+features: {standardize: true, statistics_path: artifacts/stats/standardized.json}

@@ -1,0 +1,26 @@
+extends: r5-rich.yaml
+experiment: r5-pretrain-rand
+run_dir: runs/r5-pretrain-rand
+data:
+  workers: 4
+  split_dir: splits/random-v1-pt
+  pretrain:
+    annotations: data/raw/iSign.pretrain_pool.csv
+    dataset_name: isign
+    dataset_revision: e4ee6c5f0d9dfcbc74205e3f1388ce94da26c298
+    annotation_revision: isign-v1.1-pretrain-pool-excl-isltranslate-sources
+    columns: {uid: [uid], text: [text]}
+    pose_root: data/raw/isign-poses
+    source_mapping: data/metadata/isign_source_mapping.csv
+    metadata_csv: null
+    coordinate_space: image_pixels
+runtime: {device: cuda, determinism_mode: warn, wall_time_seconds: 61200}
+features: {standardize: true, statistics_path: artifacts/stats/rich.json, local_hands: true, bones: true, face: true}
+lexical: {weight: 0.1, ramp_epochs: 0, max_vocabulary: 1000}
+training:
+  max_target_epochs: 40
+  early_stopping_patience: 12
+  retain_epoch_checkpoints: 15
+  stages:
+    - {name: isign-pretrain, dataset: pretrain, epochs: 15, freeze_t5: false, tune_rgb: false}
+    - {name: target-finetune, dataset: target, epochs: 40, freeze_t5: false, tune_rgb: false, lr_scale: 0.4}

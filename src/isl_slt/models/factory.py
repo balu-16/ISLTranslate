@@ -24,8 +24,18 @@ def build_model(config: Config, input_dim: int, tokenizer, lexical_size: int = 0
                 checkpoint_t5_config: dict | None = None, restoring: bool = False):
     visual = VisualEncoder(input_dim, config, initialize_rgb=not restoring)
     if config.model.decoder == "lstm":
-        return AttentionLSTM(visual, len(tokenizer), config.model.decoder_hidden, config.model.decoder_embedding,
-                             config.model.dropout, lexical_size)
+        model = AttentionLSTM(visual, len(tokenizer), config.model.decoder_hidden, config.model.decoder_embedding,
+                             config.model.dropout, lexical_size,
+                             word_dropout=config.model.word_dropout, ctc_weight=config.model.ctc_weight,
+                             rank_weight=config.model.rank_weight, rank_margin=config.model.rank_margin)
+        if config.model.init_checkpoint and not restoring:
+            import torch
+            saved = torch.load(config.model.init_checkpoint, map_location="cpu", weights_only=False)
+            state = saved.get("model") or saved.get("model_state") or saved
+            keep = {k: v for k, v in state.items() if k.startswith(("visual.", "lexical_head."))}
+            missing = model.load_state_dict(keep, strict=False)
+            print(f"init_checkpoint: loaded {len(keep)} encoder tensors", flush=True)
+        return model
     from transformers import T5Config, T5ForConditionalGeneration
     if restoring:
         if checkpoint_t5_config is None:

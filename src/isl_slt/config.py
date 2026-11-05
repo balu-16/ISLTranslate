@@ -114,9 +114,15 @@ class Model(Strict):
     lstm_hidden: int = Field(default=256, ge=1)
     lstm_layers: Literal[2] = 2
     dropout: float = Field(default=0.2, ge=0, lt=1)
+    lstm_dropout: float | None = Field(default=None, ge=0, lt=1)  # nn.LSTM inter-layer only; None = dropout
     bpe_vocab_size: int = Field(default=4000, ge=8)
     decoder_hidden: int = Field(default=512, ge=1)
     decoder_embedding: int = Field(default=256, ge=1)
+    word_dropout: float = Field(default=0, ge=0, lt=1)
+    ctc_weight: float = Field(default=0, ge=0)
+    rank_weight: float = Field(default=0, ge=0)
+    rank_margin: float = Field(default=0.2, ge=0)
+    init_checkpoint: str | None = None
 
 
 class Lexical(Strict):
@@ -136,6 +142,7 @@ class Stage(Strict):
     epochs: int = Field(ge=1)
     freeze_t5: bool = False
     tune_rgb: bool = False
+    lr_scale: float = Field(default=1.0, gt=0, le=1)  # stage peak LR = base LR x lr_scale (e.g. gentler target fine-tune)
 
 
 class Training(Strict):
@@ -158,6 +165,8 @@ class Training(Strict):
     inference_snapshot_dtype: Literal["native", "bf16"] = "native"
     guarded_chrf_tolerance: float = Field(default=0.5, ge=0)
     pose_noise_std: float = Field(default=0, ge=0, le=0.02)
+    label_smoothing: float = Field(default=0, ge=0, lt=1)
+    ce_weight: float = Field(default=1.0, ge=0)
     overfit_uids: str | None = None
     stages: list[Stage] = Field(default_factory=lambda: [
         Stage(name="adapter", epochs=1, freeze_t5=True), Stage(name="joint", epochs=19)
